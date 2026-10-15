@@ -1,0 +1,20 @@
+{
+  "modelVersion": "5.0.0",
+  "dependencies": {},
+  "execution": {
+    // "analyze": "normal",   /* Define the build analyze mode. Value: [ "normal" | "advanced" | false ]. Default: "normal" */
+    // "daemon": true,        /* Enable daemon compilation. Value: [ true | false ]. Default: true */
+    // "incremental": true,   /* Enable incremental compilation. Value: [ true | false ]. Default: true */
+    // "parallel": true,      /* Enable parallel compilation. Value: [ true | false ]. Default: true */
+    // "typeCheck": false,    /* Enable typeCheck. Value: [ true | false ]. Default: false */
+  },
+  "logging": {
+    // "level": "info"        /* Define the log output level. Value: [ "debug" | "info" | "warn" | "error" ]. Default: "info" */
+  },
+  "debugging": {
+    // "stacktrace": false    /* Enable stacktrace. Value: [ true | false ]. Default: false */
+  },
+  "nodeOptions": {
+    // "maxOldSpaceSize": 8192 /* Used to configure the memory size of the daemon process. Unit M. Default: 8192M */
+  }
+}
