@@ -66,11 +66,13 @@ endif()
 find_library(ace-ndk-lib ace_ndk.z)       # XComponent NDK（OH_NativeXComponent_*）
 find_library(ace-napi-lib ace_napi.z)     # NAPI 运行时
 find_library(hilog-lib hilog_ndk.z)       # OH_LOG_Print（日志 sink）
+find_library(ability-runtime-lib ability_runtime) # filesDir（文件日志目录）
 find_library(vulkan-lib vulkan)
 
 target_link_libraries(estarx_vulkan
     ${ace-ndk-lib}
     ${ace-napi-lib}
     ${hilog-lib}
+    ${ability-runtime-lib}
     ${vulkan-lib}
 )

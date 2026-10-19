@@ -15,6 +15,9 @@ public final class NativeBridge {
 
     private NativeBridge() {}
 
+    /** 初始化平台终端 + 文件日志；必须在 surface 创建前调用。 */
+    public static native void nativeSetLogDirectory(String directory);
+
     /** surface 创建就绪时调用（可能多次：退后台重建，native 侧走保活热恢复）。 */
     public static native void nativeInit(Surface surface);
 

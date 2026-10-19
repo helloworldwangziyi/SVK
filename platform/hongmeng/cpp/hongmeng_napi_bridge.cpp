@@ -16,6 +16,7 @@
 #include <napi/native_api.h>
 #include <ace/xcomponent/native_interface_xcomponent.h>
 #include <hilog/log.h>
+#include <AbilityKit/ability_runtime/application_context.h>
 
 #include <cstdint>
 #include <cstring>
@@ -42,9 +43,23 @@ static evk::IRasterSurface* g_renderer = nullptr;
 static evk::IPlatform* g_platform = nullptr;
 static uint32_t g_width = 0;
 static uint32_t g_height = 0;
+static std::string g_reportedLogFile;
 
-// hilog sink 由平台壳注入；core 默认只提供 stdout（见 evk/log.h）。
-// spdlog 没有内置 hilog sink，用 callback_sink 转 OH_LOG_Print。
+static std::string logDirectory() {
+    char buffer[1024] = {};
+    int32_t writeLength = 0;
+    const AbilityRuntime_ErrorCode result =
+        OH_AbilityRuntime_ApplicationContextGetFilesDir(
+            buffer, static_cast<int32_t>(sizeof(buffer)), &writeLength);
+    (void)writeLength;
+    if (result != ABILITY_RUNTIME_ERROR_CODE_NO_ERROR || buffer[0] == '\0') {
+        return {};
+    }
+    return std::string(buffer) + "/logs";
+}
+
+// hilog sink 由平台壳注入；spdlog 没有内置 hilog sink，用 callback_sink 转
+// OH_LOG_Print。成功取得应用 filesDir 后再追加完整文件 sink。
 static void ensureLogger() {
     auto logger = spdlog::get("estarx-vulkan");
     if (!logger) {
@@ -65,7 +80,22 @@ static void ensureLogger() {
                              text.c_str());
             });
     }
-    evk::log::init(logger);
+
+    evk::log::LogFileConfig config;
+    config.directory = logDirectory();
+    if (config.directory.empty()) {
+        evk::log::init(logger);
+        return;
+    }
+
+    std::string filePath;
+    if (!evk::log::initWithFile(logger, config, &filePath)) {
+        return;
+    }
+    if (g_reportedLogFile != filePath) {
+        g_reportedLogFile = filePath;
+        EVK_LOGI("log", "file_started platform=hongmeng path={}", filePath);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -164,6 +194,7 @@ static void OnSurfaceDestroyedCB(OH_NativeXComponent* /*component*/,
         g_platform = nullptr;
     }
     EVK_LOGI("harmony", "engine_suspended renderer=vulkan");
+    evk::log::flush();
 }
 
 // ---------------------------------------------------------------------------
@@ -202,6 +233,7 @@ static napi_value OnShutdown(napi_env /*env*/, napi_callback_info /*info*/) {
     }
     g_width = g_height = 0;
     EVK_LOGI("harmony", "engine_stopped renderer=vulkan");
+    evk::log::flush();
     return nullptr;
 }
 

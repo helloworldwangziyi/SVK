@@ -13,6 +13,8 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        // 必须在 Surface 创建前完成：启动初期的平台与引擎日志也要进入文件。
+        NativeBridge.nativeSetLogDirectory(getFilesDir().getAbsolutePath() + "/logs");
         setContentView(R.layout.activity_main);
     }
 

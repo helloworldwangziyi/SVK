@@ -5,10 +5,12 @@
 //   CADisplayLink 帧回调 → IApp 构建本帧内容并提交 Renderer。
 //
 // 线程规则：本文件所有函数都在 iOS 主线程调用，core 的无锁单线程假设成立。
-// 日志：core 默认 stdout（Xcode 控制台可见）；os_log sink 见母项目完整版。
+// 日志：stdout（Xcode 控制台可见）+ Application Support/logs 完整文件。
 // ============================================================================
 
 #import <Foundation/Foundation.h>
+
+#include <string>
 
 #include "ios_shell_bridge.h"
 
@@ -30,8 +32,47 @@ static evk::IRasterSurface* g_renderer = nullptr;
 static evk::IPlatform* g_platform = nullptr;
 static uint32_t g_width = 0;
 static uint32_t g_height = 0;
+static std::string g_reportedLogFile;
+
+static std::string logDirectory() {
+    @autoreleasepool {
+        NSArray<NSString*>* directories = NSSearchPathForDirectoriesInDomains(
+            NSApplicationSupportDirectory, NSUserDomainMask, YES);
+        NSString* base = directories.firstObject;
+        if (!base) {
+            return {};
+        }
+        NSString* directory = [base stringByAppendingPathComponent:@"logs"];
+        return directory.UTF8String ? directory.UTF8String : "";
+    }
+}
+
+static void ensureLogger() {
+    auto logger = spdlog::get("estarx-vulkan");
+    if (!logger) {
+        logger = spdlog::stdout_logger_mt("estarx-vulkan");
+    }
+
+    evk::log::LogFileConfig config;
+    config.directory = logDirectory();
+    if (config.directory.empty()) {
+        evk::log::init(logger);
+        return;
+    }
+
+    std::string filePath;
+    if (!evk::log::initWithFile(logger, config, &filePath)) {
+        return;
+    }
+    if (g_reportedLogFile != filePath) {
+        g_reportedLogFile = filePath;
+        EVK_LOGI("log", "file_started platform=ios path={}", filePath);
+    }
+}
 
 void evkIosInit(const void* layer) {
+    ensureLogger();
+
     if (g_renderer) {
         // 保活热恢复：引擎级资源（设备/纹理/命令设施）仍在，只按新 layer
         // 重建 surface 级资源；失败则全量拆除，落到下面的冷启动兜底。
@@ -107,6 +148,7 @@ void evkIosSuspend(void) {
         g_platform = nullptr;
     }
     EVK_LOGI("ios", "engine_suspended renderer=vulkan");
+    evk::log::flush();
 }
 
 void evkIosShutdown(void) {
@@ -119,4 +161,5 @@ void evkIosShutdown(void) {
     }
     g_width = g_height = 0;
     EVK_LOGI("ios", "engine_stopped renderer=vulkan");
+    evk::log::flush();
 }

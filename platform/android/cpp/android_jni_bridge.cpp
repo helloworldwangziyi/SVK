@@ -9,6 +9,8 @@
 
 #include <jni.h>
 
+#include <string>
+
 #include <spdlog/sinks/android_sink.h>
 
 #include "app.h"
@@ -27,18 +29,56 @@ extern "C" void evkDestroyAndroidPlatform(evk::IPlatform* platform);
 static std::unique_ptr<evk::IApp> g_app;
 static evk::IRasterSurface* g_renderer = nullptr;
 static evk::IPlatform* g_platform = nullptr;
+static std::string g_logDirectory;
+static std::string g_reportedLogFile;
+
+static void ensureLogger() {
+    auto logger = spdlog::get("estarx-vulkan");
+    if (!logger) {
+        logger = spdlog::android_logger_mt("estarx-vulkan", "estarx-vulkan");
+    }
+    if (g_logDirectory.empty()) {
+        evk::log::init(logger);
+        return;
+    }
+
+    evk::log::LogFileConfig config;
+    config.directory = g_logDirectory;
+    std::string filePath;
+    if (!evk::log::initWithFile(logger, config, &filePath)) {
+        return;
+    }
+    if (g_reportedLogFile != filePath) {
+        g_reportedLogFile = filePath;
+        EVK_LOGI("log", "file_started platform=android path={}", filePath);
+    }
+}
+
+// Java: NativeBridge.nativeSetLogDirectory(String)
+// Activity 在 Surface 创建前传入应用私有日志目录；Surface 重建时 nativeInit
+// 重复进入 ensureLogger，core 会复用同一个文件而不是重复建文件。
+extern "C" JNIEXPORT void JNICALL
+Java_com_estarx_vulkan_NativeBridge_nativeSetLogDirectory(
+    JNIEnv* env, jclass, jstring directory) {
+    if (!directory) {
+        g_logDirectory.clear();
+        return;
+    }
+    const char* chars = env->GetStringUTFChars(directory, nullptr);
+    if (!chars) {
+        return;
+    }
+    g_logDirectory = chars;
+    env->ReleaseStringUTFChars(directory, chars);
+    ensureLogger();
+}
 
 // Java: NativeBridge.nativeInit(Surface)
 // surface 创建就绪时调用（可能多次：退后台重建）。已有引擎时走保活热恢复，
 // 否则冷启动；失败时清理现场，保证下次 surfaceCreated 能干净重试。
 extern "C" JNIEXPORT void JNICALL
 Java_com_estarx_vulkan_NativeBridge_nativeInit(JNIEnv* env, jclass, jobject surface) {
-    // logcat sink 由平台壳注入；core 默认只提供 stdout（见 evk/log.h）。
-    auto logger = spdlog::get("estarx-vulkan");
-    if (!logger) {
-        logger = spdlog::android_logger_mt("estarx-vulkan", "estarx-vulkan");
-    }
-    evk::log::init(logger);
+    ensureLogger();
 
     if (g_renderer) {
         // 保活热恢复：引擎级资源（设备/纹理/命令设施）仍在，只按新 surface
@@ -127,6 +167,7 @@ Java_com_estarx_vulkan_NativeBridge_nativeDestroy(JNIEnv*, jclass) {
         g_platform = nullptr;
     }
     EVK_LOGI("android", "engine_suspended renderer=vulkan");
+    evk::log::flush();
 }
 
 // Java: NativeBridge.nativeShutdown()
@@ -141,4 +182,5 @@ Java_com_estarx_vulkan_NativeBridge_nativeShutdown(JNIEnv*, jclass) {
         g_platform = nullptr;
     }
     EVK_LOGI("android", "engine_stopped renderer=vulkan");
+    evk::log::flush();
 }
