@@ -11,8 +11,8 @@ surface 并驱动帧节奏，引擎在屏幕上绘制一个旋转的三色渐变
 ├─ render_platform.h         ├─ android/  JNI + Surface    ├─ triangle.h（共享）
 ├─ raster_surface.h          ├─ hongmeng/ NAPI + XComponent ├─ android/  Gradle 工程
 ├─ vulkan_renderer.*         ├─ ios/      C 桥 + CAMetal   ├─ hongmeng/ Hvigor 工程
-├─ gpu/vulkan_context.*      └─ desktop/  Win32 验证壳      └─ ios/      App 源
-├─ gpu/swapchain.*                                          （Xcode 工程在 Mac 上建）
+├─ gpu/vulkan_context.*      └─ desktop/  Win32 验证壳      └─ ios/      App 源 + Xcode 工程
+├─ gpu/swapchain.*
 ├─ gpu/ui_pipeline.*
 ├─ gpu/texture_cache.*
 └─ ui/canvas.*
@@ -75,16 +75,29 @@ Native 壳：`platform/hongmeng/cpp/`（NAPI 桥 + HongmengPlatform）。
 
 ### iOS（手机）
 
-在 Mac 上用 Xcode 新建 iOS App 工程（界面选 Storyboard 都不要，纯代码），
-把以下文件加进去（Compile Sources / Copy 按类型自动识别）：
+工程已就位：`samples/ios/EstarxTriangle.xcodeproj`。首次构建前先拉取
+MoltenVK（iOS 没有系统 Vulkan，引擎经 MoltenVK 直链 Metal）：
 
-- 引擎：`core/src/**`（6 个 .cpp）
-- 平台：`platform/ios/ios_vulkan_platform.mm`、`ios_shell_bridge.mm`
-- 示例：`samples/ios/EstarxTriangle/*`、`samples/triangle.h`
-- Header Search Paths：`core/src`、项目根目录、`third_party/glm`、
-  `third_party/spdlog/include`
-- 链接 `libMoltenVK.a`（`third_party/moltenvk` 的 `fetch.sh` 下载，
-  或从 MoltenVK 发行版取）+ `QuartzCore.framework`
+```bash
+./third_party/moltenvk/fetch.sh   # 官方发行版静态库 + 头文件（约 35 MB）
+```
+
+然后打开工程，`Signing & Capabilities` 选自己的 Team，连真机运行：
+
+```bash
+open samples/ios/EstarxTriangle.xcodeproj
+```
+
+说明：
+
+- 工程以引用方式组织 `core/src`、`platform/ios`、`samples/ios`（不拷贝源码），
+  改引擎任意一端代码，其他端同步生效。
+- 构建时先跑 `Embed Shaders (glslc)` 脚本阶段，把 SPIR-V 内嵌头生成到
+  DerivedSources——与 Android/鸿蒙 的 CMake 同一套 `cmake/embed_shaders.cmake`，
+  因此本机需要 cmake 与 glslc（`brew install cmake shaderc`）。
+- MoltenVK 官方 iOS 静态库只含真机 arm64 切片：只能跑真机，模拟器不参与链接。
+- 链接为静态方式（`libMoltenVK.a` 经 `MoltenVK.xcframework` 选片）+
+  `QuartzCore/Metal/IOSurface` 等系统框架，并带 `-ObjC` 链接标志。
 
 壳：`EVKMetalView`（layerClass → CAMetalLayer）+ `CADisplayLink` 帧驱动。
 

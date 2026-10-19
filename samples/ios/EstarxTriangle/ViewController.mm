@@ -72,7 +72,8 @@
 - (void)viewDidAppear:(BOOL)animated {
     [super viewDidAppear:animated];
     // surface 就绪（layer 已布局出有效 drawableSize）：冷启动或热恢复引擎。
-    evkIosInit(self.metalView.layer);
+    // C 桥以 const void* 不透传 CAMetalLayer*，ARC 下需 __bridge 显式转换。
+    evkIosInit((__bridge const void*)self.metalView.layer);
 }
 
 - (void)viewWillDisappear:(BOOL)animated {
