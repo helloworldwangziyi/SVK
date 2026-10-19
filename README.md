@@ -70,6 +70,10 @@ samples/                           # 每个子目录只描述一个独立 App
 GPU 顶点插值免费得到渐变。SPIR-V 在构建期由 `glslc` 编译并内嵌进二进制
 （`cmake/embed_shaders.cmake`），运行时零文件读取。
 
+C++ 日志会保留各端终端输出，并经有界异步队列写入应用私有日志文件，
+兼顾问题复现与高频业务场景。引擎模块、资源所有权、帧流程、简化点和日志
+获取方式，详见 [docs/engine-core.md](docs/engine-core.md)。
+
 ## 构建与打开 App
 
 统一入口会根据 `samples/<app>/app.json` 重新生成对应工程：
