@@ -32,6 +32,7 @@
 #include <utility>
 #include <vector>
 
+#include <spdlog/async.h>
 #include <spdlog/spdlog.h>
 #include <spdlog/sinks/basic_file_sink.h>
 #include <spdlog/sinks/stdout_sinks.h>
@@ -45,6 +46,11 @@ struct LogFileConfig {
     spdlog::level::level_enum terminalLevel = spdlog::level::debug;
     spdlog::level::level_enum fileLevel = spdlog::level::debug;
     spdlog::level::level_enum flushOnLevel = spdlog::level::info;
+    bool async = true;
+    size_t asyncQueueSize = 8192;
+    size_t asyncThreadCount = 1;
+    spdlog::async_overflow_policy asyncOverflowPolicy =
+        spdlog::async_overflow_policy::overrun_oldest;
 };
 
 namespace detail {
@@ -62,6 +68,20 @@ inline std::string& currentLogFilePathStorage() {
 inline std::shared_ptr<spdlog::sinks::basic_file_sink_mt>& currentFileSinkStorage() {
     static std::shared_ptr<spdlog::sinks::basic_file_sink_mt> value;
     return value;
+}
+
+inline bool& currentAsyncStorage() {
+    static bool value = false;
+    return value;
+}
+
+inline const char* overflowPolicyName(spdlog::async_overflow_policy policy) {
+    switch (policy) {
+        case spdlog::async_overflow_policy::block: return "block";
+        case spdlog::async_overflow_policy::overrun_oldest: return "overrun_oldest";
+        case spdlog::async_overflow_policy::discard_new: return "discard_new";
+    }
+    return "unknown";
 }
 
 inline std::string joinPath(const std::string& directory, const std::string& filename) {
@@ -118,6 +138,7 @@ inline void init(const std::shared_ptr<spdlog::logger>& logger) {
     detail::currentLogDirectoryStorage().clear();
     detail::currentLogFilePathStorage().clear();
     detail::currentFileSinkStorage().reset();
+    detail::currentAsyncStorage() = false;
 }
 
 /**
@@ -155,7 +176,8 @@ inline bool initWithFile(const std::shared_ptr<spdlog::logger>& terminalLogger,
         spdlog::warn("[evk][log][file_sink_disabled reason=no_directory]");
         return false;
     }
-    if (detail::currentLogDirectoryStorage() == config.directory && hasFileSink()) {
+    if (detail::currentLogDirectoryStorage() == config.directory &&
+        detail::currentAsyncStorage() == config.async && hasFileSink()) {
         if (createdFilePath) {
             *createdFilePath = detail::currentLogFilePathStorage();
         }
@@ -185,8 +207,22 @@ inline bool initWithFile(const std::shared_ptr<spdlog::logger>& terminalLogger,
         fileSink->set_level(config.fileLevel);
         sinks.push_back(fileSink);
 
-        auto logger = std::make_shared<spdlog::logger>(terminalLogger->name(),
-                                                       sinks.begin(), sinks.end());
+        std::shared_ptr<spdlog::logger> logger;
+        if (config.async) {
+            auto pool = spdlog::thread_pool();
+            if (!pool) {
+                spdlog::init_thread_pool(config.asyncQueueSize,
+                                         config.asyncThreadCount);
+                pool = spdlog::thread_pool();
+            }
+            logger = std::make_shared<spdlog::async_logger>(
+                terminalLogger->name(), sinks.begin(), sinks.end(), pool,
+                config.asyncOverflowPolicy);
+        } else {
+            logger = std::make_shared<spdlog::logger>(terminalLogger->name(),
+                                                      sinks.begin(), sinks.end());
+        }
+
         const auto loggerLevel = config.terminalLevel < config.fileLevel
                                      ? config.terminalLevel
                                      : config.fileLevel;
@@ -197,8 +233,15 @@ inline bool initWithFile(const std::shared_ptr<spdlog::logger>& terminalLogger,
         detail::currentLogDirectoryStorage() = config.directory;
         detail::currentLogFilePathStorage() = filePath;
         detail::currentFileSinkStorage() = fileSink;
+        detail::currentAsyncStorage() = config.async;
         if (createdFilePath) {
             *createdFilePath = filePath;
+        }
+        if (config.async) {
+            spdlog::info(
+                "[evk][log][async_started queue_size={} threads={} overflow={}]",
+                config.asyncQueueSize, config.asyncThreadCount,
+                detail::overflowPolicyName(config.asyncOverflowPolicy));
         }
         return true;
     } catch (const std::exception& ex) {
@@ -227,10 +270,43 @@ inline const std::string& currentLogFilePath() {
     return detail::currentLogFilePathStorage();
 }
 
+inline size_t asyncQueuedCount() {
+    const auto pool = spdlog::thread_pool();
+    return pool ? pool->queue_size() : 0;
+}
+
+inline size_t asyncOverrunCount() {
+    const auto pool = spdlog::thread_pool();
+    return pool ? pool->overrun_counter() : 0;
+}
+
+inline size_t asyncDiscardCount() {
+    const auto pool = spdlog::thread_pool();
+    return pool ? pool->discard_counter() : 0;
+}
+
+inline size_t asyncDroppedCount() {
+    return asyncOverrunCount() + asyncDiscardCount();
+}
+
+inline void resetAsyncDropCounters() {
+    if (const auto pool = spdlog::thread_pool()) {
+        pool->reset_overrun_counter();
+        pool->reset_discard_counter();
+    }
+}
+
 inline void flush() noexcept {
     try {
-        if (spdlog::logger* logger = spdlog::default_logger_raw()) {
+        spdlog::logger* logger = spdlog::default_logger_raw();
+        if (logger) {
             logger->flush();
+        }
+        const size_t dropped = asyncDroppedCount();
+        if (logger && dropped > 0) {
+            spdlog::warn("[evk][log][async_queue_overrun count={}]", dropped);
+            logger->flush();
+            resetAsyncDropCounters();
         }
     } catch (...) {
     }
@@ -245,6 +321,7 @@ inline void shutdown() noexcept {
     detail::currentLogDirectoryStorage().clear();
     detail::currentLogFilePathStorage().clear();
     detail::currentFileSinkStorage().reset();
+    detail::currentAsyncStorage() = false;
 }
 
 /**
@@ -265,6 +342,12 @@ inline void write(spdlog::level::level_enum level,
     const auto detail = spdlog::fmt_lib::format(
         format, std::forward<Args>(args)...);
     logger->log(level, "[evk][{}][{}]", feature, detail);
+    if (level >= spdlog::level::err) {
+        try {
+            logger->flush();
+        } catch (...) {
+        }
+    }
 }
 
 } // namespace log
