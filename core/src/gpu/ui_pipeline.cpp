@@ -21,6 +21,8 @@ bool UiPipeline::create(VkRenderPass renderPass, VkExtent2D extent,
                         VkSampleCountFlagBits msaaSamples,
                         VkDescriptorSetLayout descriptorSetLayout) {
     const VkDevice device = context_.device();
+    EVK_LOGI("pipeline", "create_start width={} height={} msaa={}", extent.width,
+             extent.height, static_cast<int>(msaaSamples));
 
     // viewport 和 scissor 保持动态，所以缩放时只需重录命令缓冲。
     // 从内嵌字节码建 shader module；管线建完即可销毁（见函数尾）。
@@ -31,6 +33,8 @@ bool UiPipeline::create(VkRenderPass renderPass, VkExtent2D extent,
     if (vert == VK_NULL_HANDLE || frag == VK_NULL_HANDLE) {
         return false;
     }
+    EVK_LOGI("pipeline", "shader_modules_created vertex_bytes={} fragment_bytes={}",
+             sizeof(assets::ui_vert_spv), sizeof(assets::ui_frag_spv));
 
     // ---- 固定状态 ----
 
@@ -158,6 +162,8 @@ bool UiPipeline::create(VkRenderPass renderPass, VkExtent2D extent,
         vkDestroyShaderModule(device, frag, nullptr);
         return false;
     }
+    EVK_LOGI("pipeline", "layout_created descriptor_sets={} push_constant_bytes={}",
+             layoutInfo.setLayoutCount, pushConstant.size);
 
     VkPipelineShaderStageCreateInfo stages[2]{};
     stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -190,6 +196,11 @@ bool UiPipeline::create(VkRenderPass renderPass, VkExtent2D extent,
                                               &pipeline_) == VK_SUCCESS;
     if (!ok) {
         EVK_LOGE("pipeline", "create_graphics_pipeline_failed");
+    } else {
+        EVK_LOGI("pipeline",
+                 "created vertex_stride={} attributes={} dynamic_states={} blend=src_alpha",
+                 bindingDesc.stride, vertexInput.vertexAttributeDescriptionCount,
+                 dynamicState.dynamicStateCount);
     }
 
     // 管线建完后 SPIR-V 已被"消化"，shader module 可即刻销毁。

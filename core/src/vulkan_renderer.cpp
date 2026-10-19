@@ -13,6 +13,7 @@
 
 // std::max / std::min：裁剪矩形的边界 clamp 要用。
 #include <algorithm>
+#include <chrono>
 // std::memcpy：把顶点数据拷进映射内存。
 #include <cstring>
 #include <limits>
@@ -44,23 +45,47 @@ Renderer::~Renderer() {
 
 bool Renderer::initialize() {
     // 按依赖顺序搭建 Vulkan 栈。每一步都依赖前一步，所以任何一环失败都会立刻停止启动。
+    const auto startedAt = std::chrono::steady_clock::now();
+    EVK_LOGI("renderer", "initialize_start");
     // ① 地基：instance / surface / 物理与逻辑设备（gpu::VulkanContext）。
+    EVK_LOGI("renderer", "initialize_stage_start stage=vulkan_context");
     if (!context_.initialize()) return false;
+    EVK_LOGI("renderer", "initialize_stage_done stage=vulkan_context");
     // ② 纹理设施：descriptor 布局是管线布局的输入（shader 的 set=0），必须先于管线。
+    EVK_LOGI("renderer", "initialize_stage_start stage=texture_cache");
     if (!textureCache_.initialize()) return false;
+    EVK_LOGI("renderer", "initialize_stage_done stage=texture_cache");
     // ③ 交换链及其下游：imageView / MSAA 颜色图 / renderPass 全部依赖 swapchain 的
     // 格式与尺寸，窗口尺寸变化时这一段连同管线整体重建（见 recreateSwapchain）。
+    EVK_LOGI("renderer", "initialize_stage_start stage=swapchain");
     if (!swapchain_.create()) return false;
+    EVK_LOGI("renderer", "initialize_stage_done stage=swapchain");
+    EVK_LOGI("renderer", "initialize_stage_start stage=ui_pipeline");
     if (!uiPipeline_.create(swapchain_.renderPass(), swapchain_.extent(),
                             swapchain_.msaaSamples(),
                             textureCache_.descriptorSetLayout())) return false;
+    EVK_LOGI("renderer", "initialize_stage_done stage=ui_pipeline");
+    EVK_LOGI("renderer", "initialize_stage_start stage=framebuffers");
     if (!swapchain_.createFramebuffers()) return false;
+    EVK_LOGI("renderer", "initialize_stage_done stage=framebuffers");
     // ④ 执行设施：命令池、顶点缓冲、命令缓冲、同步原语，与 swapchain 尺寸无关。
+    EVK_LOGI("renderer", "initialize_stage_start stage=command_pool");
     if (!createCommandPool()) return false;
+    EVK_LOGI("renderer", "initialize_stage_done stage=command_pool");
+    EVK_LOGI("renderer", "initialize_stage_start stage=vertex_buffers");
     if (!createVertexBuffers()) return false;
+    EVK_LOGI("renderer", "initialize_stage_done stage=vertex_buffers");
+    EVK_LOGI("renderer", "initialize_stage_start stage=command_buffers");
     if (!createCommandBuffers()) return false;
+    EVK_LOGI("renderer", "initialize_stage_done stage=command_buffers");
+    EVK_LOGI("renderer", "initialize_stage_start stage=sync_objects");
     if (!createSyncObjects()) return false;
+    EVK_LOGI("renderer", "initialize_stage_done stage=sync_objects");
     swapchain_.takeRebuildRequest(); // 初始尺寸已用于建链，不必在首帧重复重建。
+    const auto durationMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now() - startedAt)
+                                .count();
+    EVK_LOGI("renderer", "initialize_complete duration_ms={}", durationMs);
     return true;
 }
 
@@ -137,6 +162,8 @@ bool Renderer::createCommandPool() {
         EVK_LOGE("renderer", "create_command_pool_failed");
         return false;
     }
+    EVK_LOGI("renderer", "command_pool_created queue_family={} flags=reset_command_buffer",
+             graphicsFamily);
     return true;
 }
 
@@ -150,6 +177,9 @@ bool Renderer::createVertexBuffers() {
             return false;
         }
     }
+    EVK_LOGI("renderer", "vertex_buffers_created count={} initial_capacity={} bytes_each={}",
+             vertexBuffers_.size(), kInitialVertexCapacity,
+             sizeof(ui::UiVertex) * static_cast<size_t>(kInitialVertexCapacity));
     return true;
 }
 
@@ -216,6 +246,9 @@ bool Renderer::createVertexBuffer(uint32_t frameSlot, uint32_t capacity) {
     vertexBuffers_[frameSlot] = newBuffer;
     vertexBufferMemorys_[frameSlot] = newMemory;
     vertexBufferCapacities_[frameSlot] = capacity;
+    EVK_LOGI("renderer",
+             "vertex_buffer_ready frame_slot={} capacity={} bytes={} memory_type={}",
+             frameSlot, capacity, bufferSize, allocInfo.memoryTypeIndex);
     return true;
 }
 
@@ -290,6 +323,8 @@ bool Renderer::createCommandBuffers() {
         EVK_LOGE("renderer", "allocate_command_buffers_failed");
         return false;
     }
+    EVK_LOGI("renderer", "command_buffers_created count={} level=primary",
+             commandBuffers_.size());
     return true;
 }
 
@@ -325,12 +360,17 @@ bool Renderer::createSyncObjects() {
             return false;
         }
     }
+    EVK_LOGI("renderer", "sync_objects_created frames={} semaphores={} fences={}",
+             gpu::kMaxFramesInFlight,
+             imageAvailableSemaphores_.size() + renderFinishedSemaphores_.size(),
+             inFlightFences_.size());
     return true;
 }
 
 bool Renderer::recreateSwapchain() {
     // 先等 GPU 空闲，释放依赖 swapchain 的状态，再从头重建。
     // 重建期间不能有任何帧在飞：先 vkDeviceWaitIdle 让 GPU 完全空闲。
+    EVK_LOGI("renderer", "swapchain_recreate_start");
     vkDeviceWaitIdle(context_.device());
     // 然后按 initialize() 里"依赖 swapchain 的那一段"原序重建；
     // 命令池、顶点缓冲、同步对象与尺寸无关，不用动。
@@ -338,10 +378,13 @@ bool Renderer::recreateSwapchain() {
     uiPipeline_.destroy();
     swapchain_.cleanup();
     if (!swapchain_.create()) return false;
+    EVK_LOGI("renderer", "swapchain_recreate_stage_done stage=swapchain");
     if (!uiPipeline_.create(swapchain_.renderPass(), swapchain_.extent(),
                             swapchain_.msaaSamples(),
                             textureCache_.descriptorSetLayout())) return false;
+    EVK_LOGI("renderer", "swapchain_recreate_stage_done stage=ui_pipeline");
     if (!swapchain_.createFramebuffers()) return false;
+    EVK_LOGI("renderer", "swapchain_recreate_complete");
     return true;
 }
 
@@ -352,28 +395,35 @@ void Renderer::setSize(uint32_t width, uint32_t height) {
 bool Renderer::suspendSurface() {
     // 已挂起（无 surface）视为成功，幂等。
     if (context_.surface() == VK_NULL_HANDLE) return true;
+    EVK_LOGI("renderer", "surface_suspend_start");
     const VkDevice device = context_.device();
     if (device != VK_NULL_HANDLE) vkDeviceWaitIdle(device);
     // 与 recreateSwapchain 同序销毁"依赖 swapchain 的一段"，再销毁 surface 本体。
     uiPipeline_.destroy();
     swapchain_.cleanup();
     context_.destroySurface();
+    EVK_LOGI("renderer", "surface_suspended");
     return true;
 }
 
 bool Renderer::resumeSurface(IPlatform* platform) {
     // 已有 surface 说明未挂起，无需恢复（幂等）。
     if (context_.surface() != VK_NULL_HANDLE) return true;
+    EVK_LOGI("renderer", "surface_resume_start");
     // 重建顺序同 initialize 的 ③ 段：surface → swapchain → 管线 → 帧缓冲。
     context_.setPlatform(platform);
     if (!context_.recreateSurface()) return false;
+    EVK_LOGI("renderer", "surface_resume_stage_done stage=surface");
     if (!swapchain_.create()) return false;
+    EVK_LOGI("renderer", "surface_resume_stage_done stage=swapchain");
     if (!uiPipeline_.create(swapchain_.renderPass(), swapchain_.extent(),
                             swapchain_.msaaSamples(),
                             textureCache_.descriptorSetLayout())) return false;
+    EVK_LOGI("renderer", "surface_resume_stage_done stage=ui_pipeline");
     if (!swapchain_.createFramebuffers()) return false;
     // 新 surface 的尺寸已直接用于建链，不必在恢复后首帧重复重建。
     swapchain_.takeRebuildRequest();
+    EVK_LOGI("renderer", "surface_resumed");
     return true;
 }
 

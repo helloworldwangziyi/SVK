@@ -22,13 +22,18 @@ Swapchain::Swapchain(VulkanContext& context, bool transparent)
 bool Swapchain::create() {
     // MSAA 采样数只依赖物理设备属性，renderPass/framebuffer 创建前定下来即可；
     // 每次创建重查一次，resize 重建时结果不变。
+    EVK_LOGI("swapchain", "create_start");
     msaaSamples_ = pickMsaaSampleCount();
+    EVK_LOGI("swapchain", "msaa_selected samples={}", static_cast<int>(msaaSamples_));
     if (!createSwapchain()) return false;
     if (!createImageViews()) return false;
     // MSAA 颜色图尺寸/格式跟随 swapchain，必须在 renderPass（声明采样数）与
     // framebuffer（挂视图）之前创建；失败时内部会降级为单采样，不判失败。
     createColorResources();
     if (!createRenderPass()) return false;
+    EVK_LOGI("swapchain", "create_complete width={} height={} msaa={}",
+             swapchainExtent_.width, swapchainExtent_.height,
+             static_cast<int>(msaaSamples_));
     return true;
 }
 
@@ -66,6 +71,7 @@ bool Swapchain::createSwapchain() {
     const VkPhysicalDevice physicalDevice = context_.physicalDevice();
     const VkDevice device = context_.device();
     const VkSurfaceKHR surface = context_.surface();
+    EVK_LOGI("swapchain", "swapchain_create_start");
 
     // 选择适合当前窗口的 surface 格式、present 模式和尺寸。
     // 三连查询之一：surface 能力（尺寸范围、图像数量范围、当前变换等）。
@@ -88,6 +94,14 @@ bool Swapchain::createSwapchain() {
     if (presentModeCount > 0) {
         vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, surface, &presentModeCount, presentModes.data());
     }
+    EVK_LOGI("swapchain",
+             "surface_queried formats={} present_modes={} current_extent={}x{} "
+             "min_extent={}x{} max_extent={}x{} transform={} images={}..{}",
+             formats.size(), presentModes.size(), caps.currentExtent.width,
+             caps.currentExtent.height, caps.minImageExtent.width,
+             caps.minImageExtent.height, caps.maxImageExtent.width,
+             caps.maxImageExtent.height, static_cast<int>(caps.currentTransform),
+             caps.minImageCount, caps.maxImageCount);
 
     // 选格式：默认取第一个，但优先 B8G8R8A8_UNORM + sRGB：移动端最常见、与 shader 输出匹配。
     VkSurfaceFormatKHR surfaceFormat = formats[0];
@@ -234,11 +248,21 @@ bool Swapchain::createSwapchain() {
     // 记住格式与尺寸：后面 renderPass、pipeline、framebuffer、viewport 都要用。
     swapchainImageFormat_ = surfaceFormat.format;
     swapchainExtent_ = extent;
+    EVK_LOGI("swapchain",
+             "swapchain_created width={} height={} images={} format={} color_space={} "
+             "present_mode={} sharing_mode={} composite_alpha={}",
+             extent.width, extent.height, swapchainImages_.size(),
+             static_cast<int>(surfaceFormat.format),
+             static_cast<int>(surfaceFormat.colorSpace), static_cast<int>(presentMode),
+             static_cast<int>(createInfo.imageSharingMode),
+             static_cast<int>(createInfo.compositeAlpha));
     return true;
 }
 
 bool Swapchain::createImageViews() {
     const VkDevice device = context_.device();
+    EVK_LOGI("swapchain", "image_views_create_start count={}",
+             swapchainImages_.size());
 
     // 每个 swapchain 图像都要创建一个 2D 颜色视图。
     // VkImage 只是显存里的原始数据，VkImageView 描述"如何解读它"（格式/维度/范围）；
@@ -268,6 +292,8 @@ bool Swapchain::createImageViews() {
             return false;
         }
     }
+    EVK_LOGI("swapchain", "image_views_created count={}",
+             swapchainImageViews_.size());
     return true;
 }
 
@@ -291,7 +317,13 @@ bool Swapchain::createColorResources() {
     const VkDevice device = context_.device();
 
     // 单采样 = 未启用 MSAA，renderPass/framebuffer 都走旧的单附件路径。
-    if (msaaSamples_ == VK_SAMPLE_COUNT_1_BIT) return true;
+    if (msaaSamples_ == VK_SAMPLE_COUNT_1_BIT) {
+        EVK_LOGI("swapchain", "msaa_resources_skipped reason=single_sample");
+        return true;
+    }
+    EVK_LOGI("swapchain", "msaa_resources_create_start samples={} size={}x{}",
+             static_cast<int>(msaaSamples_), swapchainExtent_.width,
+             swapchainExtent_.height);
 
     // 多采样颜色图：与 swapchain 图像同尺寸、同格式，只是 samples = N、
     // 用途是"被绘制"（颜色附件）。resolve 由 subpass 自动完成，不需要
@@ -339,6 +371,7 @@ bool Swapchain::createColorResources() {
         }
     }
     if (memoryType == UINT32_MAX) {
+        EVK_LOGI("swapchain", "msaa_memory_fallback reason=no_lazily_allocated");
         vkDestroyImage(device, msaaColorImage_, nullptr);
         msaaColorImage_ = VK_NULL_HANDLE;
         imageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
@@ -390,11 +423,15 @@ bool Swapchain::createColorResources() {
         msaaSamples_ = VK_SAMPLE_COUNT_1_BIT;
         return false;
     }
+    EVK_LOGI("swapchain", "msaa_resources_created samples={} bytes={} memory_type={}",
+             static_cast<int>(msaaSamples_), memReq.size, memoryType);
     return true;
 }
 
 bool Swapchain::createRenderPass() {
     // 附件描述：renderPass 不绑定具体图像，只声明"有一个什么样的附件、怎么用"。
+    EVK_LOGI("swapchain", "render_pass_create_start msaa={}",
+             static_cast<int>(msaaSamples_));
     //
     // MSAA 开启时附件变成两个，各司其职：
     //   [0] swapchain 图像 —— 绘制结果的最终归宿，兼作 resolve 目标；
@@ -484,11 +521,15 @@ bool Swapchain::createRenderPass() {
         EVK_LOGE("swapchain", "create_render_pass_failed");
         return false;
     }
+    EVK_LOGI("swapchain", "render_pass_created attachments={} msaa={}",
+             createInfo.attachmentCount, static_cast<int>(msaaSamples_));
     return true;
 }
 
 bool Swapchain::createFramebuffers() {
     const VkDevice device = context_.device();
+    EVK_LOGI("swapchain", "framebuffers_create_start count={}",
+             swapchainImageViews_.size());
 
     // 每个 swapchain 图像视图都对应一个 framebuffer。
     // 每张图像配一个；渲染时按 acquire 到的 imageIndex 选用对应的那一个。
@@ -516,6 +557,9 @@ bool Swapchain::createFramebuffers() {
             return false;
         }
     }
+    EVK_LOGI("swapchain", "framebuffers_created count={} width={} height={} msaa={}",
+             swapchainFramebuffers_.size(), swapchainExtent_.width,
+             swapchainExtent_.height, static_cast<int>(msaaSamples_));
     return true;
 }
 

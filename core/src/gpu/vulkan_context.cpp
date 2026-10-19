@@ -93,12 +93,16 @@ VulkanContext::~VulkanContext() {
 
 bool VulkanContext::initialize() {
     // 按依赖顺序搭建 Vulkan 栈。每一步都依赖前一步，所以任何一环失败都会立刻停止启动。
+    EVK_LOGI("vulkan", "initialize_start");
     // ① 地基：VkInstance 是 Vulkan 入口；surface 必须基于 instance 创建。
     if (!createInstance()) return false;
+    EVK_LOGI("vulkan", "instance_created");
     if (!createSurface()) return false;
+    EVK_LOGI("vulkan", "surface_created");
     // ② 选 GPU 与建逻辑设备：这两步都要查询 surface 的 present 支持，故排在 surface 之后。
     if (!pickPhysicalDevice()) return false;
     if (!createLogicalDevice()) return false;
+    EVK_LOGI("vulkan", "initialize_complete");
     return true;
 }
 
@@ -132,6 +136,7 @@ void VulkanContext::shutdown() {
 
 bool VulkanContext::createInstance() {
     // 实例创建主要是在探测能力：先选 surface 扩展，加载器支持时再加调试扩展。
+    EVK_LOGI("vulkan", "instance_create_start");
     // VkApplicationInfo：告诉驱动应用/引擎名称与 API 版本，驱动可据此做兼容性处理与优化。
     VkApplicationInfo appInfo{};
     // sType 是 Vulkan 所有 CreateInfo 结构体的固定首字段模式：标明自身类型，
@@ -191,6 +196,11 @@ bool VulkanContext::createInstance() {
     createInfo.enabledLayerCount = static_cast<uint32_t>(layers.size());
     createInfo.ppEnabledLayerNames = layers.data();
 
+    EVK_LOGI("vulkan",
+             "instance_config extensions={} available_extensions={} validation_layers={} "
+             "debug_utils={}",
+             extensions.size(), availableExts.size(), layers.size(), useDebugUtils);
+
     // vkCreateInstance 是整个 Vulkan 栈第一个真正干活的调用；失败通常是缺扩展或驱动问题。
     if (vkCreateInstance(&createInfo, nullptr, &instance_) != VK_SUCCESS) {
         EVK_LOGE("vulkan", "create_instance_failed");
@@ -218,8 +228,9 @@ bool VulkanContext::createInstance() {
         // 必须用 vkGetInstanceProcAddr 按名字动态加载；加载不到就跳过（缺调试不影响渲染）。
         auto func = reinterpret_cast<PFN_vkCreateDebugUtilsMessengerEXT>(
             vkGetInstanceProcAddr(instance_, "vkCreateDebugUtilsMessengerEXT"));
-        if (func) {
-            func(instance_, &debugCreateInfo, nullptr, &debugMessenger_);
+        if (func && func(instance_, &debugCreateInfo, nullptr, &debugMessenger_) ==
+                        VK_SUCCESS) {
+            EVK_LOGI("vulkan", "debug_messenger_created");
         }
     }
 
@@ -230,7 +241,12 @@ bool VulkanContext::createSurface() {
     // surface 的创建交给平台抽象层处理。
     // 具体怎么建 surface 只有平台知道：Android 包 ANativeWindow，
     // 所以委托给 IPlatform，本文件不含任何平台 API。
-    return platform_->createVulkanSurface(instance_, &surface_);
+    EVK_LOGI("vulkan", "surface_create_start");
+    if (!platform_->createVulkanSurface(instance_, &surface_)) {
+        EVK_LOGE("vulkan", "surface_create_failed");
+        return false;
+    }
+    return true;
 }
 
 void VulkanContext::destroySurface() {
@@ -253,6 +269,7 @@ bool VulkanContext::recreateSurface() {
 
 bool VulkanContext::pickPhysicalDevice() {
     // 只保留既能绘制到 surface、又能 present swapchain 图像的设备。
+    EVK_LOGI("vulkan", "physical_device_select_start");
     // 枚举系统里所有支持 Vulkan 的 GPU（独显/核显/软渲染都可能出现）。
     uint32_t count = 0;
     vkEnumeratePhysicalDevices(instance_, &count, nullptr);
@@ -261,6 +278,7 @@ bool VulkanContext::pickPhysicalDevice() {
         EVK_LOGE("vulkan", "physical_device_not_found reason=no_vulkan_gpu");
         return false;
     }
+    EVK_LOGI("vulkan", "physical_devices_enumerated count={}", count);
 
     // 第二次调用取回全部 GPU 句柄。
     std::vector<VkPhysicalDevice> devices(count);
@@ -303,6 +321,15 @@ bool VulkanContext::pickPhysicalDevice() {
         // 三个条件同时满足才算合适：能画、能呈现、支持 swapchain。
         if (graphicsFamily >= 0 && presentFamily >= 0 && swapchainSupported) {
             physicalDevice_ = dev;
+            VkPhysicalDeviceProperties properties{};
+            vkGetPhysicalDeviceProperties(dev, &properties);
+            EVK_LOGI("vulkan",
+                     "physical_device_selected name={} api={}.{}.{} vendor={} "
+                     "graphics_family={} present_family={} device_extensions={}",
+                     properties.deviceName, VK_VERSION_MAJOR(properties.apiVersion),
+                     VK_VERSION_MINOR(properties.apiVersion),
+                     VK_VERSION_PATCH(properties.apiVersion), properties.vendorID,
+                     graphicsFamily, presentFamily, exts.size());
             return true;
         }
     }
@@ -314,6 +341,7 @@ bool VulkanContext::pickPhysicalDevice() {
 
 bool VulkanContext::createLogicalDevice() {
     // 创建最小化的逻辑设备，并申请所需的队列族。
+    EVK_LOGI("vulkan", "logical_device_create_start");
     // 与挑选设备时相同的队列族查询，这次针对已选定的 GPU，要拿准确的族索引来建队列。
     uint32_t queueFamilyCount = 0;
     vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice_, &queueFamilyCount, nullptr);
@@ -371,6 +399,12 @@ bool VulkanContext::createLogicalDevice() {
     createInfo.enabledExtensionCount = static_cast<uint32_t>(deviceExtensions.size());
     createInfo.ppEnabledExtensionNames = deviceExtensions.data();
 
+    EVK_LOGI("vulkan",
+             "logical_device_config queue_families={} graphics_family={} "
+             "present_family={} device_extensions={}",
+             queueCreateInfos.size(), graphicsFamily, presentFamily,
+             deviceExtensions.size());
+
     // 逻辑设备 vs 物理设备：physical 是硬件本身，logical 是我们与硬件交互的"会话"，
     // 之后几乎所有 Vulkan 调用都以 device_ 为第一个参数。
     if (vkCreateDevice(physicalDevice_, &createInfo, nullptr, &device_) != VK_SUCCESS) {
@@ -381,6 +415,7 @@ bool VulkanContext::createLogicalDevice() {
     // 队列句柄不用"创建"：设备建好后按族索引取出即可（每族只建了 1 条，取 index 0）。
     vkGetDeviceQueue(device_, static_cast<uint32_t>(graphicsFamily), 0, &graphicsQueue_);
     vkGetDeviceQueue(device_, static_cast<uint32_t>(presentFamily), 0, &presentQueue_);
+    EVK_LOGI("vulkan", "logical_device_created queues={}", queueCreateInfos.size());
     return true;
 }
 
