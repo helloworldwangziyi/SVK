@@ -1,0 +1,10 @@
+{
+  "name": "Triangle",
+  "displayName": "estarx 三角形",
+  "identifier": "com.estarx.triangle",
+  "versionName": "1.0.0",
+  "versionCode": 1,
+  "sources": [
+    "app.cpp"
+  ]
+}

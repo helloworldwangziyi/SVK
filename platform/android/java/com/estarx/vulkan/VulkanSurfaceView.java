@@ -10,8 +10,8 @@ import android.view.SurfaceView;
  * A SurfaceView that forwards surface lifecycle events to the native Vulkan renderer.
  *
  * 薄壳视图：只负责向系统拿 surface，然后原样转发给 JNI，并用 Choreographer
- * 驱动每帧。自身不含任何业务逻辑（"薄壳"的含义）；绘制内容由引擎决定
- * （本示例为每帧一个旋转的三色渐变三角形）。
+ * 驱动每帧。自身不含任何业务逻辑（"薄壳"的含义）；绘制内容由 C++ App
+ * 通过引擎的公共接口决定。
  */
 public class VulkanSurfaceView extends SurfaceView implements SurfaceHolder.Callback {
 

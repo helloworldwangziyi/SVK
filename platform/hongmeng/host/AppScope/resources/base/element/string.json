@@ -1,0 +1,8 @@
+{
+  "string": [
+    {
+      "name": "app_name",
+      "value": "@EVK_APP_DISPLAY_NAME@"
+    }
+  ]
+}

@@ -21,7 +21,7 @@ public final class NativeBridge {
     /** surface 尺寸确定或变化时调用（首次创建后紧跟一次；旋转也会触发）。 */
     public static native void nativeResize(int width, int height);
 
-    /** Choreographer 的 VSync 回调：native 构建本帧三角形并提交渲染。 */
+    /** Choreographer 的 VSync 回调：由 C++ App 构建本帧内容并提交渲染。 */
     public static native void nativeBeginFrame(long frameTimeNanos);
 
     /** surfaceDestroyed 语义 = 保活挂起：只释放 surface 级资源，引擎级资源保留。 */

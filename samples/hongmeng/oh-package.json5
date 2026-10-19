@@ -1,6 +1,0 @@
-{
-  "modelVersion": "5.0.0",
-  "description": "estarx_vulkan_minimal HarmonyOS sample (triangle on Vulkan surface).",
-  "dependencies": {},
-  "devDependencies": {}
-}

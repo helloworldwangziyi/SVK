@@ -1,0 +1,6 @@
+{
+  "modelVersion": "5.0.0",
+  "description": "@EVK_APP_NAME@ HarmonyOS app generated from the shared EVK host.",
+  "dependencies": {},
+  "devDependencies": {}
+}

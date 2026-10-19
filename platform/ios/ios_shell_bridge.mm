@@ -2,7 +2,7 @@
 // iOS C 桥实现（最小形态）：UIKit 薄壳与 core 之间的翻译层。
 // 与 Android 的 android_jni_bridge.cpp 同构：
 //   CAMetalLayer → IosPlatform（vkCreateMetalSurfaceEXT，经 MoltenVK）
-//   CADisplayLink 帧回调 → 每帧构建三角形并提交 Renderer。
+//   CADisplayLink 帧回调 → IApp 构建本帧内容并提交 Renderer。
 //
 // 线程规则：本文件所有函数都在 iOS 主线程调用，core 的无锁单线程假设成立。
 // 日志：core 默认 stdout（Xcode 控制台可见）；os_log sink 见母项目完整版。
@@ -12,22 +12,20 @@
 
 #include "ios_shell_bridge.h"
 
+#include "app.h"
 #include "log.h"
 #include "raster_surface.h"
 #include "render_platform.h"
 #include "ui/canvas.h"
-
-// 共享的示例内容：每帧一个三色渐变三角形。
-#include "samples/triangle.h"
 
 // ios_vulkan_platform.mm 以 C 链接导出的工厂函数（与 Android 同款约定）：
 // bridge 只需声明原型即可调用，无需知道 IosPlatform 类的布局。
 extern "C" evk::IPlatform* evkCreateIosPlatform(const void* layer);
 extern "C" void evkDestroyIosPlatform(evk::IPlatform* platform);
 
-// 全局渲染器与平台适配器。保活语义（对照 Android）：evkIosInit 建/热恢复、
-// evkIosSuspend 挂起（引擎级资源保留）、evkIosShutdown 全量拆。
-// 全部在主线程访问，无锁。
+// App 与渲染器随引擎创建、evkIosShutdown 销毁；surface 挂起时保留。
+// evkIosInit 建/热恢复、evkIosSuspend 挂起。全部在主线程访问，无锁。
+static std::unique_ptr<evk::IApp> g_app;
 static evk::IRasterSurface* g_renderer = nullptr;
 static evk::IPlatform* g_platform = nullptr;
 static uint32_t g_width = 0;
@@ -70,6 +68,11 @@ void evkIosInit(const void* layer) {
         g_platform = nullptr;
         return;
     }
+
+    if (!g_app) {
+        g_app = evk::createApp();
+    }
+
     g_platform->getSurfaceSize(&g_width, &g_height);
     g_renderer->setSize(g_width, g_height);
     EVK_LOGI("ios", "engine_started renderer=vulkan width={} height={}", g_width,
@@ -85,12 +88,13 @@ void evkIosResize(int32_t width, int32_t height) {
 }
 
 void evkIosBeginFrame(int64_t frameTimeNanos) {
-    if (!g_renderer) {
+    if (!g_app || !g_renderer) {
         return;
     }
     const double timeSeconds = static_cast<double>(frameTimeNanos) * 1e-9;
     evk::ui::Canvas canvas;
-    evk::demo::buildTriangleFrame(canvas, g_width, g_height, timeSeconds);
+    const evk::AppFrameContext context{g_width, g_height, timeSeconds};
+    g_app->onFrame(canvas, context);
     g_renderer->render(canvas);
 }
 
@@ -106,6 +110,7 @@ void evkIosSuspend(void) {
 }
 
 void evkIosShutdown(void) {
+    g_app.reset();
     delete g_renderer;
     g_renderer = nullptr;
     if (g_platform) {

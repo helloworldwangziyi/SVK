@@ -11,22 +11,20 @@
 
 #include <spdlog/sinks/android_sink.h>
 
+#include "app.h"
 #include "log.h"
 #include "raster_surface.h"
 #include "render_platform.h"
 #include "ui/canvas.h"
-
-// 共享的示例内容：每帧一个三色渐变三角形。
-#include "samples/triangle.h"
 
 // android_vulkan_platform.cpp 以 C 链接导出的工厂函数：
 // bridge 只需声明原型即可调用，无需知道 AndroidPlatform 类的布局。
 extern "C" evk::IPlatform* evkCreateAndroidPlatform(JNIEnv* env, jobject surface);
 extern "C" void evkDestroyAndroidPlatform(evk::IPlatform* platform);
 
-// 全局渲染器与平台适配器。保活：renderer 与引擎同生命周期（冷启动建 /
-// nativeShutdown 拆）；g_platform 与 surface 一致（nativeInit 建或热恢复 /
-// nativeDestroy 拆）。全部在 UI 线程访问，无锁。
+// App 与渲染器随引擎冷启动创建、nativeShutdown 销毁；g_platform 与 surface
+// 一致（nativeInit 建或热恢复 / nativeDestroy 拆）。全部在 UI 线程访问，无锁。
+static std::unique_ptr<evk::IApp> g_app;
 static evk::IRasterSurface* g_renderer = nullptr;
 static evk::IPlatform* g_platform = nullptr;
 
@@ -79,6 +77,10 @@ Java_com_estarx_vulkan_NativeBridge_nativeInit(JNIEnv* env, jclass, jobject surf
         return;
     }
 
+    if (!g_app) {
+        g_app = evk::createApp();
+    }
+
     uint32_t width = 0, height = 0;
     g_platform->getSurfaceSize(&width, &height);
     g_renderer->setSize(width, height);
@@ -96,18 +98,19 @@ Java_com_estarx_vulkan_NativeBridge_nativeResize(JNIEnv*, jclass, jint width,
     }
 }
 
-// Java Choreographer 的 VSync 回调：构建本帧三角形并提交渲染。
+// Java Choreographer 的 VSync 回调：由 App 构建本帧内容并提交渲染。
 extern "C" JNIEXPORT void JNICALL
 Java_com_estarx_vulkan_NativeBridge_nativeBeginFrame(JNIEnv*, jclass,
                                                      jlong frameTimeNanos) {
-    if (!g_renderer || !g_platform) {
+    if (!g_app || !g_renderer || !g_platform) {
         return;
     }
     uint32_t width = 0, height = 0;
     g_platform->getSurfaceSize(&width, &height);
     const double timeSeconds = static_cast<double>(frameTimeNanos) * 1e-9;
     evk::ui::Canvas canvas;
-    evk::demo::buildTriangleFrame(canvas, width, height, timeSeconds);
+    const evk::AppFrameContext context{width, height, timeSeconds};
+    g_app->onFrame(canvas, context);
     g_renderer->render(canvas);
 }
 
@@ -130,6 +133,7 @@ Java_com_estarx_vulkan_NativeBridge_nativeDestroy(JNIEnv*, jclass) {
 // Activity.onDestroy 语义 = 真正销毁：全量释放，之后若再启动走完整冷启动。
 extern "C" JNIEXPORT void JNICALL
 Java_com_estarx_vulkan_NativeBridge_nativeShutdown(JNIEnv*, jclass) {
+    g_app.reset();
     delete g_renderer;
     g_renderer = nullptr;
     if (g_platform) {

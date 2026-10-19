@@ -1,30 +1,62 @@
 # estarx_vulkan_minimal
 
-从 `estarx_vulkan` 提取的**最原始状态**：各端（Android / 鸿蒙 / iOS / 桌面）只提供
-surface 并驱动帧节奏，引擎在屏幕上绘制一个旋转的三色渐变三角形。
+从 `estarx_vulkan` 提取的移动端种子工程：Android、鸿蒙和 iOS 宿主只提供
+surface 与帧节奏，具体 App 业务全部由平台无关的 C++ 代码实现。
 
-这是一个"种子"项目——保留了母项目的引擎架构与代码风格，去掉了 UI 框架层
-（视图树/布局/文字/动画/平台通道/持久化/网络），只留：
+## 项目结构与依赖边界
 
 ```
-引擎核心（core/）            平台薄壳（platform/）          示例内容（samples/）
-├─ render_platform.h         ├─ android/  JNI + Surface    ├─ triangle.h（共享）
-├─ raster_surface.h          ├─ hongmeng/ NAPI + XComponent ├─ android/  Gradle 工程
-├─ vulkan_renderer.*         ├─ ios/      C 桥 + CAMetal   ├─ hongmeng/ Hvigor 工程
-├─ gpu/vulkan_context.*      └─ desktop/  Win32 验证壳      └─ ios/      App 源 + Xcode 工程
-├─ gpu/swapchain.*
-├─ gpu/ui_pipeline.*
-├─ gpu/texture_cache.*
-└─ ui/canvas.*
+app                                # 统一的 App 生成、构建和打开入口
+cmake/generate_app.cmake           # 读取 app.json，生成各端工程
+dist/                              # 最终 App 产物（构建后生成，不入库）
+
+core/                              # C++ SDK：公共接口、绘制与渲染
+├─ src/app.h                       # IApp：平台宿主与 App 之间的通用接口
+├─ src/render_platform.h           # IPlatform：Vulkan surface 平台抽象
+├─ src/raster_surface.h            # IRasterSurface：渲染接口
+├─ src/vulkan_renderer.*
+├─ src/gpu/
+└─ src/ui/
+
+platform/                          # 各端平台适配、系统能力与共享宿主
+├─ android/
+│  ├─ cpp/ + java/                 # JNI、Surface 和共享 Java 组件
+│  └─ host/                        # 唯一的 Android Gradle 宿主模板
+├─ hongmeng/
+│  ├─ cpp/                         # NAPI + HongmengPlatform
+│  └─ host/                        # 唯一的鸿蒙 Hvigor 宿主模板
+└─ ios/
+   ├─ ios_shell_bridge.*           # C 桥 + CAMetal + IosPlatform
+   └─ host/                        # 唯一的 iOS Xcode 宿主模板
+
+samples/                           # 每个子目录只描述一个独立 App
+└─ triangle/
+   ├─ app.json                     # 名称、包名、版本和 C++ 源文件列表
+   ├─ app.cpp                      # createApp：装配 TriangleApp
+   └─ triangle.h                   # C++ 三角形业务
 ```
 
-## 架构（与母项目一致的分层）
+依赖方向保持为 **App → core ← platform**。平台桥接层只调用 `evk::IApp`，
+不得包含具体 App 头文件。共享宿主中的 Java、ArkTS、Objective-C 仅承担系统要求的
+宿主装配，不写 App 业务。项目只面向 Android、鸿蒙和 iOS。
 
-- **`evk::IPlatform`**（`core/src/render_platform.h`）：平台抽象接口。
-  各端实现它：创建 `VkSurfaceKHR`、查询绘制区尺寸。MoltenVK（iOS）的
-  额外要求也经它的可选钩子声明。
-- **`evk::IRasterSurface`**（`core/src/raster_surface.h`）：渲染器接口。
-  平台壳只依赖它，不感知 Vulkan。
+目录职责、旧 `samples/android/` 的来历以及宿主生成流程，详见
+[docs/project-structure.md](docs/project-structure.md)。
+
+新增 App 时只需建立 `samples/<app>/`，编写 `app.json` 和 C++ 源文件，并实现
+`evk::createApp()`；不需要复制三端工程，也不需要修改平台层。`app.json` 中的
+`identifier` 同时作为 Android applicationId、iOS Bundle ID 和鸿蒙 bundleName，
+`sources` 支持列出多个 `.cpp`。各端工程生成到 `build/apps/<app>/<platform>/`，
+属于可重建的派生产物，不应直接修改或提交。
+
+## 核心架构
+
+- **`evk::IApp`**（`core/src/app.h`）：App 公共接口；平台宿主在每帧调用
+  `onFrame`，具体实现由各 App 的 `createApp()` 提供。
+- **`evk::IPlatform`**（`core/src/render_platform.h`）：创建 `VkSurfaceKHR`、
+  查询绘制区尺寸；MoltenVK（iOS）的额外要求也经可选钩子声明。
+- **`evk::IRasterSurface`**（`core/src/raster_surface.h`）：渲染器接口，
+  平台壳只依赖它，不感知 Vulkan 实现。
 - **`evk::Renderer`**（`core/src/vulkan_renderer.*`）：帧编排
   acquire → 上传顶点 → 录制 → 提交 → present；含 surface 旋转补偿、
   swapchain 重建重试、保活挂起/恢复。
@@ -38,68 +70,67 @@ surface 并驱动帧节奏，引擎在屏幕上绘制一个旋转的三色渐变
 GPU 顶点插值免费得到渐变。SPIR-V 在构建期由 `glslc` 编译并内嵌进二进制
 （`cmake/embed_shaders.cmake`），运行时零文件读取。
 
-## 各端构建 / 运行
+## 构建与打开 App
 
-### 桌面（本机验证，Windows）
-
-需要 CMake + MSVC + Vulkan SDK（提供 glslc 与 loader）：
+统一入口会根据 `samples/<app>/app.json` 重新生成对应工程：
 
 ```bash
-cmake -B build/desktop -G "Visual Studio 17 2022" -A x64
-cmake --build build/desktop --config Debug
-./build/desktop/Debug/evk_triangle_desktop.exe
+./app build triangle android       # 生成并构建 Android APK
+./app build triangle ios           # 生成并执行 iOS 无签名 Debug 构建
+./app generate triangle hongmeng   # 只生成鸿蒙工程
+
+./app open triangle android        # 生成并用 Android Studio 打开
+./app open triangle ios            # 生成并用 Xcode 打开
+./app open triangle hongmeng       # 生成并用 DevEco Studio 打开
 ```
 
-弹出一个 480×800 窗口：深蓝灰背景 + 旋转三色渐变三角形。
+`open` 找不到对应 IDE 时会打印生成路径。需要真机签名和运行时，使用 `open`
+打开生成工程后按各端常规流程操作；直接修改生成目录会在下次生成时失去意义，
+应改 `app.json`、App 源码或 `platform/*/host` 模板。
 
-### Android（手机）
+`build` 成功后会将可安装或可运行的最终产物收集到
+`dist/<app>/<platform>/` 并打印完整路径；`build/` 只保存生成工程和中间产物。
+两个目录都可删除并重新生成，不提交到版本库。
 
-需要 Android SDK + NDK + JDK 17+。`samples/android/local.properties`
-里的 `sdk.dir` 改成你的 SDK 路径，然后：
+### Android
+
+Android Studio 应通过 `./app open triangle android` 打开，或手动选择
+`build/apps/triangle/android/`。仓库根目录和 `samples/` 都不是 Gradle 工程，
+旧的 `samples/android/` 已不再使用。
+
+需要 Android SDK、NDK 和 JDK 17+。macOS 入口会通过 `/usr/libexec/java_home`
+选择 JDK 17，其他环境使用当前 `JAVA_HOME`。若 SDK 不能自动发现，可在
+`platform/android/host/local.properties` 配置本机 `sdk.dir`（该文件不入库）。
+
+APK 输出到：
+
+```text
+dist/triangle/android/triangle-debug.apk
+```
+
+### iOS
+
+首次构建前拉取 MoltenVK，并确保本机有 CMake 与 glslc：
 
 ```bash
-cd samples/android
-./gradlew assembleDebug
-adb install app/build/outputs/apk/debug/app-debug.apk
+./third_party/moltenvk/fetch.sh
+brew install cmake shaderc
 ```
 
-Java 壳：`VulkanSurfaceView`（SurfaceView + Choreographer 帧驱动）；
-Native 壳：`platform/android/cpp/`（JNI 桥 + AndroidPlatform）。
+iOS 生成工程引用 `core/src`、`platform/ios` 和当前 App 的绝对源路径，
+不复制这些源码。`build` 使用真机 arm64 目标并关闭签名，仅用于编译验证；
+真机运行请用 `open` 打开 Xcode 后选择 Team。无签名 `.app` 输出到：
 
-### 鸿蒙（手机/平板）
-
-用 DevEco Studio 打开 `samples/hongmeng/`，
-`File > Project Structure > Signing Configs` 自动签名后运行。
-ArkTS 壳：`VulkanShell.ets`（XComponent SURFACE + DisplaySync 帧驱动）；
-Native 壳：`platform/hongmeng/cpp/`（NAPI 桥 + HongmengPlatform）。
-
-### iOS（手机）
-
-工程已就位：`samples/ios/EstarxTriangle.xcodeproj`。首次构建前先拉取
-MoltenVK（iOS 没有系统 Vulkan，引擎经 MoltenVK 直链 Metal）：
-
-```bash
-./third_party/moltenvk/fetch.sh   # 官方发行版静态库 + 头文件（约 35 MB）
+```text
+dist/triangle/ios/Triangle.app
 ```
 
-然后打开工程，`Signing & Capabilities` 选自己的 Team，连真机运行：
+### 鸿蒙
 
-```bash
-open samples/ios/EstarxTriangle.xcodeproj
-```
-
-说明：
-
-- 工程以引用方式组织 `core/src`、`platform/ios`、`samples/ios`（不拷贝源码），
-  改引擎任意一端代码，其他端同步生效。
-- 构建时先跑 `Embed Shaders (glslc)` 脚本阶段，把 SPIR-V 内嵌头生成到
-  DerivedSources——与 Android/鸿蒙 的 CMake 同一套 `cmake/embed_shaders.cmake`，
-  因此本机需要 cmake 与 glslc（`brew install cmake shaderc`）。
-- MoltenVK 官方 iOS 静态库只含真机 arm64 切片：只能跑真机，模拟器不参与链接。
-- 链接为静态方式（`libMoltenVK.a` 经 `MoltenVK.xcframework` 选片）+
-  `QuartzCore/Metal/IOSurface` 等系统框架，并带 `-ObjC` 链接标志。
-
-壳：`EVKMetalView`（layerClass → CAMetalLayer）+ `CADisplayLink` 帧驱动。
+`generate` 或 `open` 会生成完整 Hvigor 工程到
+`build/apps/triangle/hongmeng/`。在 DevEco Studio 的
+`File > Project Structure > Signing Configs` 配置签名后构建运行。
+当前统一入口不替代 DevEco 的鸿蒙构建流程，也不自动收集其构建产物。
 
 ## 与母项目的对应关系
 

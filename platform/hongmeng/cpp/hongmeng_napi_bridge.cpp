@@ -23,13 +23,11 @@
 
 #include <spdlog/sinks/callback_sink.h>
 
+#include "app.h"
 #include "log.h"
 #include "raster_surface.h"
 #include "render_platform.h"
 #include "ui/canvas.h"
-
-// 共享的示例内容：每帧一个三色渐变三角形。
-#include "samples/triangle.h"
 
 // hongmeng_vulkan_platform.cpp 以 C 链接导出的工厂函数（与 Android 同款约定）：
 // bridge 只需声明原型即可调用，无需知道 HongmengPlatform 类的布局。
@@ -37,9 +35,9 @@ extern "C" evk::IPlatform* evkCreateHongmengPlatform(void* window, int32_t width
                                                      int32_t height);
 extern "C" void evkDestroyHongmengPlatform(evk::IPlatform* platform);
 
-// 全局渲染器与平台适配器。保活语义（对照 Android）：OnSurfaceCreated 建/热恢复、
-// OnSurfaceDestroyed 挂起（引擎级资源保留）、onShutdown 全量拆。
-// 全部在 UI 线程访问，无锁。
+// App 与渲染器随引擎创建、onShutdown 销毁；surface 挂起时保留。
+// OnSurfaceCreated 建/热恢复、OnSurfaceDestroyed 挂起。全部在 UI 线程访问，无锁。
+static std::unique_ptr<evk::IApp> g_app;
 static evk::IRasterSurface* g_renderer = nullptr;
 static evk::IPlatform* g_platform = nullptr;
 static uint32_t g_width = 0;
@@ -129,6 +127,11 @@ static void OnSurfaceCreatedCB(OH_NativeXComponent* component, void* window) {
         g_platform = nullptr;
         return;
     }
+
+    if (!g_app) {
+        g_app = evk::createApp();
+    }
+
     g_renderer->setSize(g_width, g_height);
     EVK_LOGI("harmony", "engine_started renderer=vulkan width={} height={}", g_width,
              g_height);
@@ -168,19 +171,20 @@ static void OnSurfaceDestroyedCB(OH_NativeXComponent* /*component*/,
 // ---------------------------------------------------------------------------
 
 // ArkTS: bridge.beginFrame(frameTimeNanos)
-// ArkTS DisplaySync 的帧回调（UI 线程）：构建本帧三角形并提交渲染。
+// ArkTS DisplaySync 的帧回调（UI 线程）：由 App 构建本帧内容并提交渲染。
 static napi_value BeginFrame(napi_env env, napi_callback_info info) {
     size_t argc = 1;
     napi_value argv[1] = {nullptr};
     napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
-    if (argc < 1 || !g_renderer) {
+    if (argc < 1 || !g_app || !g_renderer) {
         return nullptr;
     }
     int64_t frameTimeNanos = 0;
     napi_get_value_int64(env, argv[0], &frameTimeNanos);
     const double timeSeconds = static_cast<double>(frameTimeNanos) * 1e-9;
     evk::ui::Canvas canvas;
-    evk::demo::buildTriangleFrame(canvas, g_width, g_height, timeSeconds);
+    const evk::AppFrameContext context{g_width, g_height, timeSeconds};
+    g_app->onFrame(canvas, context);
     g_renderer->render(canvas);
     return nullptr;
 }
@@ -189,6 +193,7 @@ static napi_value BeginFrame(napi_env env, napi_callback_info info) {
 // Ability.onDestroy 语义 = 真正销毁（对照 Android nativeShutdown）：全量释放，
 // 之后若再启动走完整冷启动流程。
 static napi_value OnShutdown(napi_env /*env*/, napi_callback_info /*info*/) {
+    g_app.reset();
     delete g_renderer;
     g_renderer = nullptr;
     if (g_platform) {

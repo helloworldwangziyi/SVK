@@ -48,17 +48,8 @@ target_include_directories(evk_core
         ${EVK_GENERATED_DIR}
 )
 
-# ---- 桌面端薄壳（Win32 验证壳）：窗口 → surface → 每帧三角形 ----
-# Android 不走这里：samples/android 的 CMake 直接把 core 源码编进 .so，
-# Vulkan 头与 libvulkan 来自 NDK。
+# Android App 使用 NDK 提供的 Vulkan 头与 loader；独立构建 core 时使用 Vulkan SDK。
 if(NOT ANDROID)
     find_package(Vulkan REQUIRED)
     target_link_libraries(evk_core PUBLIC Vulkan::Vulkan)
-
-    add_executable(evk_triangle_desktop
-        platform/desktop/main.cpp
-    )
-    target_include_directories(evk_triangle_desktop PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR})
-    target_link_libraries(evk_triangle_desktop PRIVATE evk_core)
 endif()

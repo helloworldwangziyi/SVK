@@ -26,7 +26,7 @@ extern "C" {
 // 否则冷启动；失败时清理现场，保证下次调用能干净重试。
 void evkIosInit(const void* layer);
 void evkIosResize(int32_t width, int32_t height);
-// CADisplayLink 的帧回调：构建本帧三角形并提交渲染。
+// CADisplayLink 的帧回调：由 C++ App 构建本帧内容并提交渲染。
 void evkIosBeginFrame(int64_t frameTimeNanos);
 // 视图/surface 销毁（viewWillDisappear / 退后台）语义 = 保活挂起：
 // 只释放 surface 级资源，引擎级资源（设备/纹理/命令设施）全部保留，
