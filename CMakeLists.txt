@@ -53,3 +53,10 @@ if(NOT ANDROID)
     find_package(Vulkan REQUIRED)
     target_link_libraries(evk_core PUBLIC Vulkan::Vulkan)
 endif()
+
+# ---- host 侧测试 ----
+option(EVK_BUILD_TESTS "构建 host 侧测试程序（test/）" ON)
+if(EVK_BUILD_TESTS AND NOT ANDROID)
+    enable_testing()
+    add_subdirectory(test)
+endif()
