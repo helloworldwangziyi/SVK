@@ -6,7 +6,7 @@
  */
 #include <vulkan/vulkan.h>
 
-namespace evk::gpu {
+namespace svp::gpu {
 
 class VulkanContext;
 
@@ -61,4 +61,4 @@ private:
     bool uploaded_ = false; ///< true = 已转为 SHADER_READ_ONLY_OPTIMAL 布局
 };
 
-} // namespace evk::gpu
+} // namespace svp::gpu

@@ -8,7 +8,7 @@
 
 ## 1. 当前定位
 
-当前引擎是一个 **C++17、Vulkan、立即模式 2D 几何渲染核心**，构建为静态库 `evk_core`。
+当前引擎是一个 **C++17、Vulkan、立即模式 2D 几何渲染核心**，构建为静态库 `svp_core`。
 
 它已经具备：
 
@@ -43,18 +43,18 @@
 | `core/src/gpu/ui_pipeline.h/.cpp` | 唯一一条 UI GraphicsPipeline 及其 Layout |
 | `core/src/gpu/texture_cache.h/.cpp` | 采样器、Descriptor 和 1×1 白纹理；目前不是通用纹理缓存 |
 | `core/src/ui/canvas.h/.cpp` | CPU 侧顶点流和 Batch 收集，支持三角形、矩形 |
-| `core/src/log.h` | spdlog 初始化、统一消息前缀和 `EVK_LOG*` 宏 |
+| `core/src/log.h` | spdlog 初始化、统一消息前缀和 `SVP_LOG*` 宏 |
 | `shaders/ui_vertex.vert` | 像素坐标经 MVP 转到 NDC，传递颜色和 UV |
 | `shaders/ui_fragment.frag` | 输出 `顶点色 × 纹理采样` |
-| `CMakeLists.txt` | 定义 `evk_core`、依赖和 Shader 构建 |
+| `CMakeLists.txt` | 定义 `svp_core`、依赖和 Shader 构建 |
 | `cmake/embed_shaders.cmake` | GLSL → SPIR-V → C++ `uint32_t` 数组 |
 
 ## 3. 依赖方向与对象关系
 
 ```text
 platform 宿主
-  ├─ 持有并调用 evk::IApp
-  ├─ 提供 evk::IPlatform 实现
+  ├─ 持有并调用 svp::IApp
+  ├─ 提供 svp::IPlatform 实现
   └─ 通过 IRasterSurface 持有 Renderer
 
 App（samples/<app>/）
@@ -97,7 +97,7 @@ public:
 };
 ```
 
-每个 App 通过 `evk::createApp()` 返回自己的实现。当前接口只有帧回调，没有输入、生命周期、系统路由或屏幕变化事件。
+每个 App 通过 `svp::createApp()` 返回自己的实现。当前接口只有帧回调，没有输入、生命周期、系统路由或屏幕变化事件。
 
 ### 4.2 `IPlatform`：原生平台边界
 
@@ -245,8 +245,8 @@ Fence 只在确定会提交前 Reset，避免提前 Reset 后中途返回导致�
 
 - 创建 Instance 时加入通用 Surface 扩展和 `IPlatform` 提供的平台扩展。
 - 可选启用 `VK_EXT_debug_utils`。
-- 只有定义 `EVK_ENABLE_VALIDATION` 且系统存在 `VK_LAYER_KHRONOS_validation` 时才启用校验层。
-- 校验回调只订阅 Warning/Error，并转发到 `EVK_LOG*`。
+- 只有定义 `SVP_ENABLE_VALIDATION` 且系统存在 `VK_LAYER_KHRONOS_validation` 时才启用校验层。
+- 校验回调只订阅 Warning/Error，并转发到 `SVP_LOG*`。
 - 选择第一个同时满足 Graphics、Present 和 Swapchain 扩展的物理设备。
 - Graphics/Present 队列族相同时只创建一个队列，不同则分别创建。
 - 提供显存类型查找和 SPIR-V ShaderModule 创建。
@@ -306,7 +306,7 @@ UNDEFINED → TRANSFER_DST_OPTIMAL
 
 ## 8. Shader 与构建
 
-根 `CMakeLists.txt` 将以下实现编入 `evk_core`：
+根 `CMakeLists.txt` 将以下实现编入 `svp_core`：
 
 - Renderer。
 - 四个 GPU 模块。
@@ -349,27 +349,27 @@ Surface 恢复时：
 
 `core/src/log.h` 提供：
 
-- `evk::log::init(tag)`：创建或复用 stdout logger。
-- `evk::log::init(logger)`：注入平台构造的终端 logger。
+- `svp::log::init(tag)`：创建或复用 stdout logger。
+- `svp::log::init(logger)`：注入平台构造的终端 logger。
 - `LogFileConfig`：配置文件目录、文件名前缀、终端/文件级别、自动 Flush 级别，以及异步队列大小、线程数和溢出策略。
-- `evk::log::initWithFile(...)`：保留平台终端 sink，追加 `basic_file_sink_mt`，并默认放入异步 logger。
+- `svp::log::initWithFile(...)`：保留平台终端 sink，追加 `basic_file_sink_mt`，并默认放入异步 logger。
 - `hasFileSink()`、`currentLogFilePath()`：查询文件日志状态和准确路径。
 - `asyncQueuedCount()`、`asyncOverrunCount()`、`asyncDroppedCount()`：查询异步队列状态。
 - `flush()`、`shutdown()`：生命周期收尾封装，不跨 JNI/NAPI 抛异常。
-- `EVK_LOGV/D/I/W/E`：Trace、Debug、Info、Warn、Error 五级宏。
+- `SVP_LOGV/D/I/W/E`：Trace、Debug、Info、Warn、Error 五级宏。
 
 消息正文仍统一为：
 
 ```text
-[evk][<feature>][<event> key=value ...]
+[svp][<feature>][<event> key=value ...]
 ```
 
 ### 10.2 异步队列 + 多 sink 结构
 
 ```text
 业务线程 / UI 线程
-    ↓ EVK_LOG*
-evk::log::write（格式化正文并复制 log_msg）
+    ↓ SVP_LOG*
+svp::log::write（格式化正文并复制 log_msg）
     ↓
 有界异步队列（默认 8192 条）
     ↓
@@ -386,9 +386,9 @@ evk::log::write（格式化正文并复制 log_msg）
 %Y-%m-%d %H:%M:%S.%e [%l] [thread %t] %v
 ```
 
-文件中的 `%t` 仍表示调用 `EVK_LOG*` 的生产线程，而不是后台日志线程。
+文件中的 `%t` 仍表示调用 `SVP_LOG*` 的生产线程，而不是后台日志线程。
 
-默认终端和文件级别均为 Debug，因此 Trace 仍不会输出；logger 级别取两者中更详细的一级，后续可以通过 `LogFileConfig` 单独打开某一侧。Info 及以上会在后台线程自动 Flush；Error 在入队后还会让调用线程等待一次 Flush，尽量保证关键错误先于 Crash 落盘。Surface 挂起和引擎关闭时的 `evk::log::flush()` 会等待队列排空。
+默认终端和文件级别均为 Debug，因此 Trace 仍不会输出；logger 级别取两者中更详细的一级，后续可以通过 `LogFileConfig` 单独打开某一侧。Info 及以上会在后台线程自动 Flush；Error 在入队后还会让调用线程等待一次 Flush，尽量保证关键错误先于 Crash 落盘。Surface 挂起和引擎关闭时的 `svp::log::flush()` 会等待队列排空。
 
 异步线程池是进程级共享的，第一次 `initWithFile()` 中的队列大小和线程数生效；后续调用复用同一个线程池。
 
@@ -397,9 +397,9 @@ evk::log::write（格式化正文并复制 log_msg）
 | 环境 | 终端输出 | 文件目录 | 初始化方式 |
 |---|---|---|---|
 | Android | Logcat | `getFilesDir()/logs/` | `MainActivity.onCreate()` 在 Surface 创建前经 JNI 传入 |
-| iOS | stdout（Xcode 控制台） | `Application Support/logs/` | `evkIosInit()` 创建命名 stdout logger 并追加文件 |
+| iOS | stdout（Xcode 控制台） | `Application Support/logs/` | `svpIosInit()` 创建命名 stdout logger 并追加文件 |
 | 鸿蒙 | HiLog | `filesDir/logs/` | 经 `OH_AbilityRuntime_ApplicationContextGetFilesDir()` 获取 |
-| 默认/测试 | stdout | 无，除非显式调用 `initWithFile()` | `evk::log::init(tag)` |
+| 默认/测试 | stdout | 无，除非显式调用 `initWithFile()` | `svp::log::init(tag)` |
 
 文件名为：
 
@@ -412,21 +412,21 @@ estarx-vulkan-YYYYMMDD-HHMMSS-<毫秒>.log
 三端初始化成功后会写一条启动日志，其中包含真实文件路径：
 
 ```text
-[evk][log][file_started platform=<platform> path=...]
+[svp][log][file_started platform=<platform> path=...]
 ```
 
 ### 10.4 当前覆盖范围
 
 文件会包含：
 
-- Core 引擎各模块的 `EVK_LOG*`。
+- Core 引擎各模块的 `SVP_LOG*`。
 - Android JNI、iOS C 桥、鸿蒙 NAPI 桥接日志。
-- App 业务中主动使用 `EVK_LOG*` 的日志。
+- App 业务中主动使用 `SVP_LOG*` 的日志。
 - 启用 Vulkan Validation 时的校验消息。
 
 文件不会自动包含：
 
-- Java、Objective-C、ArkTS 中未经过 `EVK_LOG*` 的原生日志。
+- Java、Objective-C、ArkTS 中未经过 `SVP_LOG*` 的原生日志。
 - 系统日志、GPU 驱动内部日志或其他第三方库自己的输出。
 
 ### 10.5 初始化与生命周期日志事件
@@ -434,27 +434,27 @@ estarx-vulkan-YYYYMMDD-HHMMSS-<毫秒>.log
 冷启动时，顶层事件按以下顺序出现：
 
 ```text
-[evk][renderer][initialize_start]
-[evk][renderer][initialize_stage_start stage=vulkan_context]
-[evk][vulkan][instance_create_start]
-[evk][vulkan][surface_create_start]
-[evk][vulkan][physical_device_select_start]
-[evk][vulkan][logical_device_create_start]
-[evk][vulkan][initialize_complete]
-[evk][renderer][initialize_stage_done stage=vulkan_context]
-[evk][renderer][initialize_stage_start stage=texture_cache]
-[evk][renderer][initialize_stage_done stage=texture_cache]
-[evk][renderer][initialize_stage_start stage=swapchain]
-[evk][renderer][initialize_stage_done stage=swapchain]
-[evk][renderer][initialize_stage_start stage=ui_pipeline]
-[evk][renderer][initialize_stage_done stage=ui_pipeline]
-[evk][renderer][initialize_stage_start stage=framebuffers]
-[evk][renderer][initialize_stage_done stage=framebuffers]
-[evk][renderer][initialize_stage_start stage=command_pool]
-[evk][renderer][initialize_stage_start stage=vertex_buffers]
-[evk][renderer][initialize_stage_start stage=command_buffers]
-[evk][renderer][initialize_stage_start stage=sync_objects]
-[evk][renderer][initialize_complete duration_ms=...]
+[svp][renderer][initialize_start]
+[svp][renderer][initialize_stage_start stage=vulkan_context]
+[svp][vulkan][instance_create_start]
+[svp][vulkan][surface_create_start]
+[svp][vulkan][physical_device_select_start]
+[svp][vulkan][logical_device_create_start]
+[svp][vulkan][initialize_complete]
+[svp][renderer][initialize_stage_done stage=vulkan_context]
+[svp][renderer][initialize_stage_start stage=texture_cache]
+[svp][renderer][initialize_stage_done stage=texture_cache]
+[svp][renderer][initialize_stage_start stage=swapchain]
+[svp][renderer][initialize_stage_done stage=swapchain]
+[svp][renderer][initialize_stage_start stage=ui_pipeline]
+[svp][renderer][initialize_stage_done stage=ui_pipeline]
+[svp][renderer][initialize_stage_start stage=framebuffers]
+[svp][renderer][initialize_stage_done stage=framebuffers]
+[svp][renderer][initialize_stage_start stage=command_pool]
+[svp][renderer][initialize_stage_start stage=vertex_buffers]
+[svp][renderer][initialize_stage_start stage=command_buffers]
+[svp][renderer][initialize_stage_start stage=sync_objects]
+[svp][renderer][initialize_complete duration_ms=...]
 ```
 
 子模块还会记录关键资源参数：实例扩展、物理设备名称和队列族、白纹理显存、Surface 能力、Swapchain 尺寸/格式/PresentMode、MSAA 采样和显存、RenderPass 附件、Shader 字节数、顶点缓冲容量以及同步对象数量。

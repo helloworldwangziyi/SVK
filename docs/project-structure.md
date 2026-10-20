@@ -22,13 +22,13 @@ SVK/
 │
 ├─ samples/                         # 每个子目录是一个完整 App
 │  └─ triangle/
-│     ├─ app.cpp                    # 实现 evk::createApp()
+│     ├─ app.cpp                    # 实现 svp::createApp()
 │     ├─ triangle.h                 # 三角形业务代码
 │     ├─ android/                   # Android Gradle 工程
 │     ├─ ios/                       # iOS Xcode 工程
 │     └─ hongmeng/                  # 鸿蒙 Hvigor 工程
 │
-├─ test/                            # host 侧测试（经根 CMake 的 EVK_BUILD_TESTS 开关构建）
+├─ test/                            # host 侧测试（经根 CMake 的 SVP_BUILD_TESTS 开关构建）
 │  └─ test_log.cpp                  # log 模块功能与性能测试
 │
 └─ build/                           # 根 CMake 的本机构建目录，不入库
@@ -47,13 +47,13 @@ SVK/
 | 工程 | 位置 | 打开方式 |
 |---|---|---|
 | Android | `samples/<app>/android/` | Android Studio |
-| iOS | `samples/<app>/ios/EVKApp.xcodeproj` | Xcode |
+| iOS | `samples/<app>/ios/SVPApp.xcodeproj` | Xcode |
 | 鸿蒙 | `samples/<app>/hongmeng/` | DevEco Studio |
 
 工程不复制仓库中的共享源码，而是按**相对路径**引用：
 
 - Android、鸿蒙的 CMakeLists 以自身位置推导仓库根目录
-  （`get_filename_component(EVK_ROOT ...)`），再引用 `core/`、
+  （`get_filename_component(SVP_ROOT ...)`），再引用 `core/`、
   `platform/<平台>/cpp` 和 App 源文件。
 - iOS 工程以 `$(SRCROOT)/../../..` 推导仓库根目录，引用 `core/`、
   `platform/ios/`、`third_party/moltenvk/` 和 App 源文件。
@@ -69,7 +69,7 @@ SVK/
 
 ## App 与壳的分工
 
-App 在 `app.cpp` 中实现 `evk::createApp()`，返回自己的 `evk::IApp` 实现。
+App 在 `app.cpp` 中实现 `svp::createApp()`，返回自己的 `svp::IApp` 实现。
 各端壳代码（Activity、ViewController、EntryAbility + `platform/` 桥接）
 只依赖这个公共接口，不包含 `triangle.h` 之类的具体 App 头文件。
 
@@ -103,16 +103,16 @@ Java、Objective-C 或 ArkTS 中分别复制一套业务逻辑。
 
 复制 `samples/triangle/` 为 `samples/<app>/`，然后：
 
-1. 替换 `app.cpp`、`triangle.h` 为自己的业务，实现 `evk::createApp()`。
+1. 替换 `app.cpp`、`triangle.h` 为自己的业务，实现 `svp::createApp()`。
 2. 在三端工程中分别修改应用名、包名和版本号：
    - Android：`android/app/build.gradle` 的 `applicationId`、
      `versionName`、`versionCode`、`resValue 'app_name'`。
    - iOS：project.pbxproj 中 target 的 `PRODUCT_BUNDLE_IDENTIFIER`、
      `PRODUCT_NAME`、`MARKETING_VERSION`、`CURRENT_PROJECT_VERSION`，
-     以及 `EVKApp/Info.plist` 的显示名。
+     以及 `SVPApp/Info.plist` 的显示名。
    - 鸿蒙：`AppScope/app.json5` 的 `bundleName`、`versionCode`、
      `versionName`，以及两处 `string.json` 的显示名。
-3. 如果重命名了 App 源文件，同步修改两个 CMakeLists 的 `EVK_APP_SOURCES`
+3. 如果重命名了 App 源文件，同步修改两个 CMakeLists 的 `SVP_APP_SOURCES`
    和 iOS 工程的 App 分组。
 
 ## 应该在哪里修改代码？
@@ -125,7 +125,7 @@ Java、Objective-C 或 ArkTS 中分别复制一套业务逻辑。
 | 增加 Android 系统能力 | `platform/android/cpp/` 或 `java/` |
 | 修改 Triangle 的 Android 壳 | `samples/triangle/android/` |
 | 修改 Triangle 的 iOS 或鸿蒙壳 | `samples/triangle/ios/` 或 `hongmeng/` |
-| 新增 host 侧测试 | `test/`，经 `EVK_BUILD_TESTS` 开关接入根 CMake |
+| 新增 host 侧测试 | `test/`，经 `SVP_BUILD_TESTS` 开关接入根 CMake |
 
 ## 构建方式
 
@@ -134,8 +134,8 @@ Java、Objective-C 或 ArkTS 中分别复制一套业务逻辑。
 cd samples/triangle/android && ./gradlew assembleDebug
 
 # iOS（需要 CMake、glslc，先执行 ./third_party/moltenvk/fetch.sh）
-xcodebuild -project samples/triangle/ios/EVKApp.xcodeproj \
-  -scheme EVKApp -configuration Debug \
+xcodebuild -project samples/triangle/ios/SVPApp.xcodeproj \
+  -scheme SVPApp -configuration Debug \
   -sdk iphoneos -destination generic/platform=iOS \
   CODE_SIGNING_ALLOWED=NO build
 
@@ -147,5 +147,5 @@ export JAVA_HOME=/Applications/DevEco-Studio.app/Contents/jbr/Contents/Home
 # 真机运行：用 DevEco Studio 打开工程，配置签名后构建
 ```
 
-仓库根目录的 `CMakeLists.txt` 只用于在桌面端构建 `evk_core` 静态库和
+仓库根目录的 `CMakeLists.txt` 只用于在桌面端构建 `svp_core` 静态库和
 `test/` 测试，不参与任何 App 的构建。

@@ -11,7 +11,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace evk::ui {
+namespace svp::ui {
 
 /// RGBA 颜色，分量 0~1。
 struct Color {
@@ -98,4 +98,4 @@ private:
     std::vector<Batch> batches_;     ///< 合批列表（只记顶点区间，不复制数据）
 };
 
-} // namespace evk::ui
+} // namespace svp::ui

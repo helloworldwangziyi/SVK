@@ -8,12 +8,12 @@
 #include "gpu/vulkan_context.h"
 // 预编译 SPIR-V 字节码（编译期内嵌进二进制，免运行时读文件）。
 #include "assets/ui_shaders.h"
-// EVK_LOGE 日志宏：spdlog 封装，全局统一的日志入口。
+// SVP_LOGE 日志宏：spdlog 封装，全局统一的日志入口。
 #include "log.h"
 // ui::UiVertex：顶点输入布局的 stride 来源。
 #include "ui/canvas.h"
 
-namespace evk::gpu {
+namespace svp::gpu {
 
 UiPipeline::UiPipeline(VulkanContext& context) : context_(context) {}
 
@@ -21,7 +21,7 @@ bool UiPipeline::create(VkRenderPass renderPass, VkExtent2D extent,
                         VkSampleCountFlagBits msaaSamples,
                         VkDescriptorSetLayout descriptorSetLayout) {
     const VkDevice device = context_.device();
-    EVK_LOGI("pipeline", "create_start width={} height={} msaa={}", extent.width,
+    SVP_LOGI("pipeline", "create_start width={} height={} msaa={}", extent.width,
              extent.height, static_cast<int>(msaaSamples));
 
     // viewport 和 scissor 保持动态，所以缩放时只需重录命令缓冲。
@@ -33,7 +33,7 @@ bool UiPipeline::create(VkRenderPass renderPass, VkExtent2D extent,
     if (vert == VK_NULL_HANDLE || frag == VK_NULL_HANDLE) {
         return false;
     }
-    EVK_LOGI("pipeline", "shader_modules_created vertex_bytes={} fragment_bytes={}",
+    SVP_LOGI("pipeline", "shader_modules_created vertex_bytes={} fragment_bytes={}",
              sizeof(assets::ui_vert_spv), sizeof(assets::ui_frag_spv));
 
     // ---- 固定状态 ----
@@ -157,12 +157,12 @@ bool UiPipeline::create(VkRenderPass renderPass, VkExtent2D extent,
 
     if (vkCreatePipelineLayout(device, &layoutInfo, nullptr, &pipelineLayout_) !=
         VK_SUCCESS) {
-        EVK_LOGE("pipeline", "create_layout_failed");
+        SVP_LOGE("pipeline", "create_layout_failed");
         vkDestroyShaderModule(device, vert, nullptr);
         vkDestroyShaderModule(device, frag, nullptr);
         return false;
     }
-    EVK_LOGI("pipeline", "layout_created descriptor_sets={} push_constant_bytes={}",
+    SVP_LOGI("pipeline", "layout_created descriptor_sets={} push_constant_bytes={}",
              layoutInfo.setLayoutCount, pushConstant.size);
 
     VkPipelineShaderStageCreateInfo stages[2]{};
@@ -195,9 +195,9 @@ bool UiPipeline::create(VkRenderPass renderPass, VkExtent2D extent,
                                               &pipelineInfo, nullptr,
                                               &pipeline_) == VK_SUCCESS;
     if (!ok) {
-        EVK_LOGE("pipeline", "create_graphics_pipeline_failed");
+        SVP_LOGE("pipeline", "create_graphics_pipeline_failed");
     } else {
-        EVK_LOGI("pipeline",
+        SVP_LOGI("pipeline",
                  "created vertex_stride={} attributes={} dynamic_states={} blend=src_alpha",
                  bindingDesc.stride, vertexInput.vertexAttributeDescriptionCount,
                  dynamicState.dynamicStateCount);
@@ -221,4 +221,4 @@ void UiPipeline::destroy() {
     }
 }
 
-} // namespace evk::gpu
+} // namespace svp::gpu

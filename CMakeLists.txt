@@ -8,9 +8,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # ---- shaders：glslc 编译 → SPIR-V 转 uint32 数组 → 内嵌头（免运行时读文件） ----
 find_program(GLSLC_EXECUTABLE glslc REQUIRED)
 
-set(EVK_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
-set(EVK_SHADER_HEADER "${EVK_GENERATED_DIR}/assets/ui_shaders.h")
-file(MAKE_DIRECTORY "${EVK_GENERATED_DIR}/assets")
+set(SVP_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
+set(SVP_SHADER_HEADER "${SVP_GENERATED_DIR}/assets/ui_shaders.h")
+file(MAKE_DIRECTORY "${SVP_GENERATED_DIR}/assets")
 
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/shaders/ui_vertex.vert"
@@ -24,13 +24,13 @@ execute_process(
             -DSHADER_NAME=ui
             -DVERT_SRC=${CMAKE_CURRENT_SOURCE_DIR}/shaders/ui_vertex.vert
             -DFRAG_SRC=${CMAKE_CURRENT_SOURCE_DIR}/shaders/ui_fragment.frag
-            -DOUTPUT_HEADER=${EVK_SHADER_HEADER}
+            -DOUTPUT_HEADER=${SVP_SHADER_HEADER}
             -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_shaders.cmake"
     COMMAND_ERROR_IS_FATAL ANY
 )
 
 # ---- 引擎核心静态库（平台无关） ----
-add_library(evk_core STATIC
+add_library(svp_core STATIC
     core/src/vulkan_renderer.cpp
     core/src/gpu/vulkan_context.cpp
     core/src/gpu/swapchain.cpp
@@ -39,24 +39,24 @@ add_library(evk_core STATIC
     core/src/ui/canvas.cpp
 )
 
-target_include_directories(evk_core
+target_include_directories(svp_core
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/core/src
         ${CMAKE_CURRENT_SOURCE_DIR}/third_party/glm
         ${CMAKE_CURRENT_SOURCE_DIR}/third_party/spdlog/include
     PRIVATE
-        ${EVK_GENERATED_DIR}
+        ${SVP_GENERATED_DIR}
 )
 
 # Android App 使用 NDK 提供的 Vulkan 头与 loader；独立构建 core 时使用 Vulkan SDK。
 if(NOT ANDROID)
     find_package(Vulkan REQUIRED)
-    target_link_libraries(evk_core PUBLIC Vulkan::Vulkan)
+    target_link_libraries(svp_core PUBLIC Vulkan::Vulkan)
 endif()
 
 # ---- host 侧测试 ----
-option(EVK_BUILD_TESTS "构建 host 侧测试程序（test/）" ON)
-if(EVK_BUILD_TESTS AND NOT ANDROID)
+option(SVP_BUILD_TESTS "构建 host 侧测试程序（test/）" ON)
+if(SVP_BUILD_TESTS AND NOT ANDROID)
     enable_testing()
     add_subdirectory(test)
 endif()

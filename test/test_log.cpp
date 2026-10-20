@@ -43,7 +43,7 @@ std::filesystem::path g_baseDir;
 
 void section(const char* name) { std::printf("\n== %s ==\n", name); }
 
-/// 捕获每条消息的 payload（即 [evk][feature][event ...] 正文），不经过 sink pattern。
+/// 捕获每条消息的 payload（即 [svp][feature][event ...] 正文），不经过 sink pattern。
 class CaptureSink : public spdlog::sinks::base_sink<std::mutex> {
 protected:
     void sink_it_(const spdlog::details::log_msg& msg) override {
@@ -101,21 +101,21 @@ void testFormatAndLevelFilter() {
     section("功能：消息格式与级别过滤");
     auto sink = std::make_shared<CaptureSink>();
     auto logger = std::make_shared<spdlog::logger>("capture", sink);
-    evk::log::init(logger);
+    svp::log::init(logger);
     CHECK(spdlog::default_logger_raw() == logger.get());
 
-    EVK_LOGI("test_feature", "event_name key={}", 42);
+    SVP_LOGI("test_feature", "event_name key={}", 42);
     CHECK(sink->size() == 1);
-    CHECK(sink->back() == "[evk][test_feature][event_name key=42]");
+    CHECK(sink->back() == "[svp][test_feature][event_name key=42]");
 
     logger->set_level(spdlog::level::warn);
-    EVK_LOGD("test_feature", "dropped_debug={}", 1);
-    EVK_LOGW("test_feature", "kept_warn={}", 2);
+    SVP_LOGD("test_feature", "dropped_debug={}", 1);
+    SVP_LOGW("test_feature", "kept_warn={}", 2);
     CHECK(sink->size() == 2);
-    CHECK(sink->back() == "[evk][test_feature][kept_warn=2]");
+    CHECK(sink->back() == "[svp][test_feature][kept_warn=2]");
     logger->set_level(spdlog::level::debug);
 
-    evk::log::shutdown();
+    svp::log::shutdown();
     CHECK(sink->size() == 2);
 }
 
@@ -124,24 +124,24 @@ void testFileSinkCreateReuseAndContent() {
     namespace fs = std::filesystem;
     const fs::path dir = g_baseDir / "file_sink";
 
-    evk::log::LogFileConfig config;
+    svp::log::LogFileConfig config;
     config.directory = dir.string();
-    config.filePrefix = "evk-test";
+    config.filePrefix = "svp-test";
     config.async = true;
 
     auto terminal = std::make_shared<spdlog::logger>(
         "term_async", std::make_shared<CaptureSink>());
     std::string path1;
-    CHECK(evk::log::initWithFile(terminal, config, &path1));
+    CHECK(svp::log::initWithFile(terminal, config, &path1));
     CHECK(!path1.empty());
-    CHECK(evk::log::hasFileSink());
-    CHECK(evk::log::currentLogFilePath() == path1);
+    CHECK(svp::log::hasFileSink());
+    CHECK(svp::log::currentLogFilePath() == path1);
 
-    EVK_LOGI("file_test", "write_check seq={}", 1);
+    SVP_LOGI("file_test", "write_check seq={}", 1);
 
     // 同目录重复调用复用同一文件，不新建。
     std::string path2;
-    CHECK(evk::log::initWithFile(terminal, config, &path2));
+    CHECK(svp::log::initWithFile(terminal, config, &path2));
     CHECK(path2 == path1);
     size_t logFiles = 0;
     for (const auto& entry : fs::directory_iterator(dir)) {
@@ -151,36 +151,36 @@ void testFileSinkCreateReuseAndContent() {
     }
     CHECK(logFiles == 1);
 
-    evk::log::shutdown();  // 排空异步队列后再校验文件
-    CHECK(!evk::log::hasFileSink());
-    CHECK(evk::log::currentLogFilePath().empty());
+    svp::log::shutdown();  // 排空异步队列后再校验文件
+    CHECK(!svp::log::hasFileSink());
+    CHECK(svp::log::currentLogFilePath().empty());
 
     const std::string content = readFile(path1);
-    CHECK(content.find("[evk][file_test][write_check seq=1]") !=
+    CHECK(content.find("[svp][file_test][write_check seq=1]") !=
           std::string::npos);
-    CHECK(content.find("[evk][log][async_started") != std::string::npos);
+    CHECK(content.find("[svp][log][async_started") != std::string::npos);
 }
 
 void testSyncErrorFlush() {
     section("功能：同步模式 err 级立即 flush");
     const auto dir = g_baseDir / "sync_err";
 
-    evk::log::LogFileConfig config;
+    svp::log::LogFileConfig config;
     config.directory = dir.string();
     config.async = false;
 
     auto terminal = std::make_shared<spdlog::logger>(
         "term_sync", std::make_shared<CaptureSink>());
     std::string path;
-    CHECK(evk::log::initWithFile(terminal, config, &path));
+    CHECK(svp::log::initWithFile(terminal, config, &path));
 
-    EVK_LOGE("file_test", "err_flush_check code={}", 7);
+    SVP_LOGE("file_test", "err_flush_check code={}", 7);
     // 不显式调用 flush：write() 对 err 及以上级别应已落盘。
     const std::string content = readFile(path);
-    CHECK(content.find("[evk][file_test][err_flush_check code=7]") !=
+    CHECK(content.find("[svp][file_test][err_flush_check code=7]") !=
           std::string::npos);
 
-    evk::log::shutdown();
+    svp::log::shutdown();
 }
 
 void testEmptyDirectoryFallback() {
@@ -188,29 +188,29 @@ void testEmptyDirectoryFallback() {
     auto sink = std::make_shared<CaptureSink>();
     auto terminal = std::make_shared<spdlog::logger>("term_empty", sink);
 
-    evk::log::LogFileConfig config;  // directory 留空
-    CHECK(!evk::log::initWithFile(terminal, config));
-    CHECK(!evk::log::hasFileSink());
-    CHECK(evk::log::currentLogFilePath().empty());
+    svp::log::LogFileConfig config;  // directory 留空
+    CHECK(!svp::log::initWithFile(terminal, config));
+    CHECK(!svp::log::hasFileSink());
+    CHECK(svp::log::currentLogFilePath().empty());
     // 回退原因应作为 warn 写入终端 sink。
     CHECK(sink->size() == 1);
-    CHECK(sink->back().find("[evk][log][file_sink_disabled") !=
+    CHECK(sink->back().find("[svp][log][file_sink_disabled") !=
           std::string::npos);
 
-    evk::log::shutdown();
+    svp::log::shutdown();
 }
 
 void testInitTagIdempotent() {
     section("功能：init(tag) 幂等");
-    evk::log::init("evk_test_tag");
+    svp::log::init("svp_test_tag");
     const spdlog::logger* first = spdlog::default_logger_raw();
     CHECK(first != nullptr);
-    CHECK(first && first->name() == "evk_test_tag");
+    CHECK(first && first->name() == "svp_test_tag");
 
-    evk::log::init("evk_test_tag");
+    svp::log::init("svp_test_tag");
     CHECK(spdlog::default_logger_raw() == first);
 
-    evk::log::shutdown();
+    svp::log::shutdown();
 }
 
 // ---------------- 性能测试 ----------------
@@ -219,27 +219,27 @@ void perfNullSink() {
     section("性能：调用与格式化开销（null sink，无 I/O）");
     auto logger = std::make_shared<spdlog::logger>(
         "perf_null", std::make_shared<spdlog::sinks::null_sink_mt>());
-    evk::log::init(logger);
+    svp::log::init(logger);
 
     constexpr int kWarmup = 10000;
     for (int i = 0; i < kWarmup; ++i) {
-        EVK_LOGI("warmup", "write seq={} value={}", i, i * 2);
+        SVP_LOGI("warmup", "write seq={} value={}", i, i * 2);
     }
     constexpr int kCount = 1000000;
     const auto begin = Clock::now();
     for (int i = 0; i < kCount; ++i) {
-        EVK_LOGI("perf_null", "write seq={} value={}", i, i * 2);
+        SVP_LOGI("perf_null", "write seq={} value={}", i, i * 2);
     }
     const auto end = Clock::now();
     reportPerf("null_sink 纯调用开销", kCount, elapsedMs(begin, end));
 
-    evk::log::shutdown();
+    svp::log::shutdown();
 }
 
 void perfSyncFile() {
     section("性能：同步文件写入吞吐");
     const auto dir = g_baseDir / "perf_sync";
-    evk::log::LogFileConfig config;
+    svp::log::LogFileConfig config;
     config.directory = dir.string();
     config.async = false;
     // 关闭逐条 flush，测量纯格式化 + 写入吞吐。
@@ -248,26 +248,26 @@ void perfSyncFile() {
     auto terminal = std::make_shared<spdlog::logger>(
         "perf_sync_term", std::make_shared<spdlog::sinks::null_sink_mt>());
     std::string path;
-    CHECK(evk::log::initWithFile(terminal, config, &path));
+    CHECK(svp::log::initWithFile(terminal, config, &path));
 
     constexpr int kCount = 200000;
     const auto begin = Clock::now();
     for (int i = 0; i < kCount; ++i) {
-        EVK_LOGI("perf_sync", "write seq={} value={}", i, i * 2);
+        SVP_LOGI("perf_sync", "write seq={} value={}", i, i * 2);
     }
     const auto end = Clock::now();
     reportPerf("sync_file 同步写文件", kCount, elapsedMs(begin, end));
 
-    evk::log::shutdown();
+    svp::log::shutdown();
     const std::string content = readFile(path);
-    CHECK(countOccurrences(content, "[evk][perf_sync][") ==
+    CHECK(countOccurrences(content, "[svp][perf_sync][") ==
           static_cast<size_t>(kCount));
 }
 
 void perfAsyncFile() {
     section("性能：异步文件写入吞吐与零丢失");
     const auto dir = g_baseDir / "perf_async";
-    evk::log::LogFileConfig config;
+    svp::log::LogFileConfig config;
     config.directory = dir.string();
     config.async = true;
     config.asyncQueueSize = 65536;
@@ -278,28 +278,28 @@ void perfAsyncFile() {
     auto terminal = std::make_shared<spdlog::logger>(
         "perf_async_term", std::make_shared<spdlog::sinks::null_sink_mt>());
     std::string path;
-    CHECK(evk::log::initWithFile(terminal, config, &path));
+    CHECK(svp::log::initWithFile(terminal, config, &path));
 
     constexpr int kCount = 1000000;
     const auto begin = Clock::now();
     for (int i = 0; i < kCount; ++i) {
-        EVK_LOGI("perf_async", "write seq={} value={}", i, i * 2);
+        SVP_LOGI("perf_async", "write seq={} value={}", i, i * 2);
     }
     const auto enqueued = Clock::now();
     reportPerf("async_file 调用方入队", kCount, elapsedMs(begin, enqueued));
 
-    const size_t dropped = evk::log::asyncDroppedCount();
-    const size_t queued = evk::log::asyncQueuedCount();
+    const size_t dropped = svp::log::asyncDroppedCount();
+    const size_t queued = svp::log::asyncQueuedCount();
     std::printf("  入队完成时队列滞留 %zu 条，丢弃 %zu 条（block 策略应为 0）\n",
                 queued, dropped);
     CHECK(dropped == 0);
 
-    evk::log::shutdown();  // 析构线程池时排空队列
+    svp::log::shutdown();  // 析构线程池时排空队列
     const auto drained = Clock::now();
     reportPerf("async_file 含落盘总耗时", kCount, elapsedMs(begin, drained));
 
     const std::string content = readFile(path);
-    CHECK(countOccurrences(content, "[evk][perf_async][") ==
+    CHECK(countOccurrences(content, "[svp][perf_async][") ==
           static_cast<size_t>(kCount));
 }
 
@@ -307,7 +307,7 @@ void perfAsyncFile() {
 
 int main() {
     const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
-    g_baseDir = std::filesystem::temp_directory_path() / "evk_log_test" /
+    g_baseDir = std::filesystem::temp_directory_path() / "svp_log_test" /
                 std::to_string(stamp);
     std::printf("日志测试输出目录：%s\n", g_baseDir.string().c_str());
 
@@ -322,9 +322,9 @@ int main() {
     perfAsyncFile();
 
     // 示例：真实 stdout 输出效果。
-    evk::log::init("evk_test");
-    EVK_LOGI("demo", "log_demo message={}", "hello");
-    evk::log::shutdown();
+    svp::log::init("svp_test");
+    SVP_LOGI("demo", "log_demo message={}", "hello");
+    svp::log::shutdown();
 
     std::error_code ec;
     std::filesystem::remove_all(g_baseDir, ec);

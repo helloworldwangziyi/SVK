@@ -9,7 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace evk::gpu {
+namespace svp::gpu {
 
 /// CPU 最多领先 GPU 的帧数：每帧一套命令缓冲 / 同步原语 / 顶点与纹理中转缓冲。
 constexpr uint32_t kMaxFramesInFlight = 2;
@@ -93,4 +93,4 @@ private:
     VkQueue presentQueue_ = VK_NULL_HANDLE;
 };
 
-} // namespace evk::gpu
+} // namespace svp::gpu

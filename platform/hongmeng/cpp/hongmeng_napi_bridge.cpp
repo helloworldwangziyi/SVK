@@ -32,15 +32,15 @@
 
 // hongmeng_vulkan_platform.cpp 以 C 链接导出的工厂函数（与 Android 同款约定）：
 // bridge 只需声明原型即可调用，无需知道 HongmengPlatform 类的布局。
-extern "C" evk::IPlatform* evkCreateHongmengPlatform(void* window, int32_t width,
+extern "C" svp::IPlatform* svpCreateHongmengPlatform(void* window, int32_t width,
                                                      int32_t height);
-extern "C" void evkDestroyHongmengPlatform(evk::IPlatform* platform);
+extern "C" void svpDestroyHongmengPlatform(svp::IPlatform* platform);
 
 // App 与渲染器随引擎创建、onShutdown 销毁；surface 挂起时保留。
 // OnSurfaceCreated 建/热恢复、OnSurfaceDestroyed 挂起。全部在 UI 线程访问，无锁。
-static std::unique_ptr<evk::IApp> g_app;
-static evk::IRasterSurface* g_renderer = nullptr;
-static evk::IPlatform* g_platform = nullptr;
+static std::unique_ptr<svp::IApp> g_app;
+static svp::IRasterSurface* g_renderer = nullptr;
+static svp::IPlatform* g_platform = nullptr;
 static uint32_t g_width = 0;
 static uint32_t g_height = 0;
 static std::string g_reportedLogFile;
@@ -81,20 +81,20 @@ static void ensureLogger() {
             });
     }
 
-    evk::log::LogFileConfig config;
+    svp::log::LogFileConfig config;
     config.directory = logDirectory();
     if (config.directory.empty()) {
-        evk::log::init(logger);
+        svp::log::init(logger);
         return;
     }
 
     std::string filePath;
-    if (!evk::log::initWithFile(logger, config, &filePath)) {
+    if (!svp::log::initWithFile(logger, config, &filePath)) {
         return;
     }
     if (g_reportedLogFile != filePath) {
         g_reportedLogFile = filePath;
-        EVK_LOGI("log", "file_started platform=hongmeng path={}", filePath);
+        SVP_LOGI("log", "file_started platform=hongmeng path={}", filePath);
     }
 }
 
@@ -113,7 +113,7 @@ static void OnSurfaceCreatedCB(OH_NativeXComponent* component, void* window) {
     if (OH_NativeXComponent_GetXComponentSize(component, window, &surfaceWidth,
                                               &surfaceHeight) !=
         OH_NATIVEXCOMPONENT_RESULT_SUCCESS) {
-        EVK_LOGE("harmony", "engine_start_failed phase=get_component_size");
+        SVP_LOGE("harmony", "engine_start_failed phase=get_component_size");
         return;
     }
     g_width = static_cast<uint32_t>(surfaceWidth);
@@ -122,48 +122,48 @@ static void OnSurfaceCreatedCB(OH_NativeXComponent* component, void* window) {
     if (g_renderer) {
         // 保活热恢复：引擎级资源（设备/纹理/命令设施）仍在，只按新 surface
         // 重建 surface 级资源；失败则全量拆除，落到下面的冷启动兜底。
-        evk::IPlatform* resumed = evkCreateHongmengPlatform(
+        svp::IPlatform* resumed = svpCreateHongmengPlatform(
             window, static_cast<int32_t>(g_width), static_cast<int32_t>(g_height));
         if (resumed && g_renderer->resumeSurface(resumed)) {
-            evkDestroyHongmengPlatform(g_platform);
+            svpDestroyHongmengPlatform(g_platform);
             g_platform = resumed;
-            EVK_LOGI("harmony", "engine_resumed renderer=vulkan");
+            SVP_LOGI("harmony", "engine_resumed renderer=vulkan");
             return;
         }
-        EVK_LOGE("harmony", "engine_resume_failed action=cold_start");
+        SVP_LOGE("harmony", "engine_resume_failed action=cold_start");
         if (resumed) {
-            evkDestroyHongmengPlatform(resumed);
+            svpDestroyHongmengPlatform(resumed);
         }
         delete g_renderer;
         g_renderer = nullptr;
-        evkDestroyHongmengPlatform(g_platform);
+        svpDestroyHongmengPlatform(g_platform);
         g_platform = nullptr;
     }
 
-    g_platform = evkCreateHongmengPlatform(window, static_cast<int32_t>(g_width),
+    g_platform = svpCreateHongmengPlatform(window, static_cast<int32_t>(g_width),
                                            static_cast<int32_t>(g_height));
     if (!g_platform) {
-        EVK_LOGE("harmony", "engine_start_failed phase=create_platform");
+        SVP_LOGE("harmony", "engine_start_failed phase=create_platform");
         return;
     }
 
-    g_renderer = evk::createRasterSurface(g_platform).release();
+    g_renderer = svp::createRasterSurface(g_platform).release();
     if (!g_renderer->initialize()) {
         // 失败时按创建的反序清理干净，保证下次 OnSurfaceCreated 能干净重试。
-        EVK_LOGE("harmony", "engine_start_failed phase=initialize_renderer");
+        SVP_LOGE("harmony", "engine_start_failed phase=initialize_renderer");
         delete g_renderer;
         g_renderer = nullptr;
-        evkDestroyHongmengPlatform(g_platform);
+        svpDestroyHongmengPlatform(g_platform);
         g_platform = nullptr;
         return;
     }
 
     if (!g_app) {
-        g_app = evk::createApp();
+        g_app = svp::createApp();
     }
 
     g_renderer->setSize(g_width, g_height);
-    EVK_LOGI("harmony", "engine_started renderer=vulkan width={} height={}", g_width,
+    SVP_LOGI("harmony", "engine_started renderer=vulkan width={} height={}", g_width,
              g_height);
 }
 
@@ -190,11 +190,11 @@ static void OnSurfaceDestroyedCB(OH_NativeXComponent* /*component*/,
         g_renderer->suspendSurface();
     }
     if (g_platform) {
-        evkDestroyHongmengPlatform(g_platform);
+        svpDestroyHongmengPlatform(g_platform);
         g_platform = nullptr;
     }
-    EVK_LOGI("harmony", "engine_suspended renderer=vulkan");
-    evk::log::flush();
+    SVP_LOGI("harmony", "engine_suspended renderer=vulkan");
+    svp::log::flush();
 }
 
 // ---------------------------------------------------------------------------
@@ -213,8 +213,8 @@ static napi_value BeginFrame(napi_env env, napi_callback_info info) {
     int64_t frameTimeNanos = 0;
     napi_get_value_int64(env, argv[0], &frameTimeNanos);
     const double timeSeconds = static_cast<double>(frameTimeNanos) * 1e-9;
-    evk::ui::Canvas canvas;
-    const evk::AppFrameContext context{g_width, g_height, timeSeconds};
+    svp::ui::Canvas canvas;
+    const svp::AppFrameContext context{g_width, g_height, timeSeconds};
     g_app->onFrame(canvas, context);
     g_renderer->render(canvas);
     return nullptr;
@@ -228,12 +228,12 @@ static napi_value OnShutdown(napi_env /*env*/, napi_callback_info /*info*/) {
     delete g_renderer;
     g_renderer = nullptr;
     if (g_platform) {
-        evkDestroyHongmengPlatform(g_platform);
+        svpDestroyHongmengPlatform(g_platform);
         g_platform = nullptr;
     }
     g_width = g_height = 0;
-    EVK_LOGI("harmony", "engine_stopped renderer=vulkan");
-    evk::log::flush();
+    SVP_LOGI("harmony", "engine_stopped renderer=vulkan");
+    svp::log::flush();
     return nullptr;
 }
 

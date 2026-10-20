@@ -4,7 +4,7 @@
  * @file triangle.h
  * @brief Triangle App 业务：每帧往 ui::Canvas 里画一个三色渐变三角形。
  *
- * 由 samples/triangle/app.cpp 装配到 evk::IApp，平台层不包含本头。
+ * 由 samples/triangle/app.cpp 装配到 svp::IApp，平台层不包含本头。
  * 三角形绕屏幕中心缓慢旋转、顶点色随时间循环，用来验证三端 VSync 帧通道。
  */
 #include "ui/canvas.h"
@@ -12,7 +12,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace evk::demo {
+namespace svp::demo {
 
 /// 每帧构建三角形演示帧。timeSeconds 为单调时钟秒数（各端自行提供）。
 inline void buildTriangleFrame(ui::Canvas& canvas, uint32_t width, uint32_t height,
@@ -50,4 +50,4 @@ inline void buildTriangleFrame(ui::Canvas& canvas, uint32_t width, uint32_t heig
                         color[1], color[2]);
 }
 
-} // namespace evk::demo
+} // namespace svp::demo

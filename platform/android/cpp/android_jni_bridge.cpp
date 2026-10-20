@@ -21,14 +21,14 @@
 
 // android_vulkan_platform.cpp 以 C 链接导出的工厂函数：
 // bridge 只需声明原型即可调用，无需知道 AndroidPlatform 类的布局。
-extern "C" evk::IPlatform* evkCreateAndroidPlatform(JNIEnv* env, jobject surface);
-extern "C" void evkDestroyAndroidPlatform(evk::IPlatform* platform);
+extern "C" svp::IPlatform* svpCreateAndroidPlatform(JNIEnv* env, jobject surface);
+extern "C" void svpDestroyAndroidPlatform(svp::IPlatform* platform);
 
 // App 与渲染器随引擎冷启动创建、nativeShutdown 销毁；g_platform 与 surface
 // 一致（nativeInit 建或热恢复 / nativeDestroy 拆）。全部在 UI 线程访问，无锁。
-static std::unique_ptr<evk::IApp> g_app;
-static evk::IRasterSurface* g_renderer = nullptr;
-static evk::IPlatform* g_platform = nullptr;
+static std::unique_ptr<svp::IApp> g_app;
+static svp::IRasterSurface* g_renderer = nullptr;
+static svp::IPlatform* g_platform = nullptr;
 static std::string g_logDirectory;
 static std::string g_reportedLogFile;
 
@@ -38,19 +38,19 @@ static void ensureLogger() {
         logger = spdlog::android_logger_mt("estarx-vulkan", "estarx-vulkan");
     }
     if (g_logDirectory.empty()) {
-        evk::log::init(logger);
+        svp::log::init(logger);
         return;
     }
 
-    evk::log::LogFileConfig config;
+    svp::log::LogFileConfig config;
     config.directory = g_logDirectory;
     std::string filePath;
-    if (!evk::log::initWithFile(logger, config, &filePath)) {
+    if (!svp::log::initWithFile(logger, config, &filePath)) {
         return;
     }
     if (g_reportedLogFile != filePath) {
         g_reportedLogFile = filePath;
-        EVK_LOGI("log", "file_started platform=android path={}", filePath);
+        SVP_LOGI("log", "file_started platform=android path={}", filePath);
     }
 }
 
@@ -83,48 +83,48 @@ Java_com_estarx_vulkan_NativeBridge_nativeInit(JNIEnv* env, jclass, jobject surf
     if (g_renderer) {
         // 保活热恢复：引擎级资源（设备/纹理/命令设施）仍在，只按新 surface
         // 重建 surface 级资源；失败则全量拆除，落到下面的冷启动兜底。
-        evk::IPlatform* resumed = evkCreateAndroidPlatform(env, surface);
+        svp::IPlatform* resumed = svpCreateAndroidPlatform(env, surface);
         if (resumed && g_renderer->resumeSurface(resumed)) {
-            evkDestroyAndroidPlatform(g_platform);
+            svpDestroyAndroidPlatform(g_platform);
             g_platform = resumed;
-            EVK_LOGI("android", "engine_resumed renderer=vulkan");
+            SVP_LOGI("android", "engine_resumed renderer=vulkan");
             return;
         }
-        EVK_LOGE("android", "engine_resume_failed action=cold_start");
+        SVP_LOGE("android", "engine_resume_failed action=cold_start");
         if (resumed) {
-            evkDestroyAndroidPlatform(resumed);
+            svpDestroyAndroidPlatform(resumed);
         }
         delete g_renderer;
         g_renderer = nullptr;
-        evkDestroyAndroidPlatform(g_platform);
+        svpDestroyAndroidPlatform(g_platform);
         g_platform = nullptr;
     }
 
-    g_platform = evkCreateAndroidPlatform(env, surface);
+    g_platform = svpCreateAndroidPlatform(env, surface);
     if (!g_platform) {
-        EVK_LOGE("android", "engine_start_failed phase=create_platform");
+        SVP_LOGE("android", "engine_start_failed phase=create_platform");
         return;
     }
 
-    g_renderer = evk::createRasterSurface(g_platform).release();
+    g_renderer = svp::createRasterSurface(g_platform).release();
     if (!g_renderer->initialize()) {
         // 失败时按创建的反序清理干净，保证下次 surfaceCreated 能干净重试。
-        EVK_LOGE("android", "engine_start_failed phase=initialize_renderer");
+        SVP_LOGE("android", "engine_start_failed phase=initialize_renderer");
         delete g_renderer;
         g_renderer = nullptr;
-        evkDestroyAndroidPlatform(g_platform);
+        svpDestroyAndroidPlatform(g_platform);
         g_platform = nullptr;
         return;
     }
 
     if (!g_app) {
-        g_app = evk::createApp();
+        g_app = svp::createApp();
     }
 
     uint32_t width = 0, height = 0;
     g_platform->getSurfaceSize(&width, &height);
     g_renderer->setSize(width, height);
-    EVK_LOGI("android", "engine_started renderer=vulkan width={} height={}", width,
+    SVP_LOGI("android", "engine_started renderer=vulkan width={} height={}", width,
              height);
 }
 
@@ -148,8 +148,8 @@ Java_com_estarx_vulkan_NativeBridge_nativeBeginFrame(JNIEnv*, jclass,
     uint32_t width = 0, height = 0;
     g_platform->getSurfaceSize(&width, &height);
     const double timeSeconds = static_cast<double>(frameTimeNanos) * 1e-9;
-    evk::ui::Canvas canvas;
-    const evk::AppFrameContext context{width, height, timeSeconds};
+    svp::ui::Canvas canvas;
+    const svp::AppFrameContext context{width, height, timeSeconds};
     g_app->onFrame(canvas, context);
     g_renderer->render(canvas);
 }
@@ -163,11 +163,11 @@ Java_com_estarx_vulkan_NativeBridge_nativeDestroy(JNIEnv*, jclass) {
         g_renderer->suspendSurface();
     }
     if (g_platform) {
-        evkDestroyAndroidPlatform(g_platform);
+        svpDestroyAndroidPlatform(g_platform);
         g_platform = nullptr;
     }
-    EVK_LOGI("android", "engine_suspended renderer=vulkan");
-    evk::log::flush();
+    SVP_LOGI("android", "engine_suspended renderer=vulkan");
+    svp::log::flush();
 }
 
 // Java: NativeBridge.nativeShutdown()
@@ -178,9 +178,9 @@ Java_com_estarx_vulkan_NativeBridge_nativeShutdown(JNIEnv*, jclass) {
     delete g_renderer;
     g_renderer = nullptr;
     if (g_platform) {
-        evkDestroyAndroidPlatform(g_platform);
+        svpDestroyAndroidPlatform(g_platform);
         g_platform = nullptr;
     }
-    EVK_LOGI("android", "engine_stopped renderer=vulkan");
-    evk::log::flush();
+    SVP_LOGI("android", "engine_stopped renderer=vulkan");
+    svp::log::flush();
 }

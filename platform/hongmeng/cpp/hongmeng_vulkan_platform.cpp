@@ -27,7 +27,7 @@
 
 #include "log.h"
 
-namespace evk {
+namespace svp {
 
 class HongmengPlatform : public IPlatform {
 public:
@@ -40,14 +40,14 @@ public:
 
     bool createVulkanSurface(VkInstance instance, VkSurfaceKHR* surface) override {
         if (!window_) {
-            EVK_LOGE("harmony", "surface_create_failed reason=native_window_null");
+            SVP_LOGE("harmony", "surface_create_failed reason=native_window_null");
             return false;
         }
         VkSurfaceCreateInfoOHOS createInfo{};
         createInfo.sType = VK_STRUCTURE_TYPE_SURFACE_CREATE_INFO_OHOS;
         createInfo.window = window_;
         if (vkCreateSurfaceOHOS(instance, &createInfo, nullptr, surface) != VK_SUCCESS) {
-            EVK_LOGE("harmony", "surface_create_failed reason=vulkan_surface_failed");
+            SVP_LOGE("harmony", "surface_create_failed reason=vulkan_surface_failed");
             return false;
         }
         return true;
@@ -72,18 +72,18 @@ void destroyHongmengPlatform(IPlatform* platform) {
     delete platform;
 }
 
-} // namespace evk
+} // namespace svp
 
 extern "C" {
 // 以 C 链接导出工厂函数，NAPI 桥接层无需感知 HongmengPlatform 类的内存布局
-// （与 Android evkCreateAndroidPlatform 同款约定）。
-evk::IPlatform* evkCreateHongmengPlatform(void* window, int32_t width, int32_t height) {
-    return evk::createHongmengPlatform(static_cast<OHNativeWindow*>(window),
+// （与 Android svpCreateAndroidPlatform 同款约定）。
+svp::IPlatform* svpCreateHongmengPlatform(void* window, int32_t width, int32_t height) {
+    return svp::createHongmengPlatform(static_cast<OHNativeWindow*>(window),
                                        static_cast<uint32_t>(width),
                                        static_cast<uint32_t>(height));
 }
 
-void evkDestroyHongmengPlatform(evk::IPlatform* platform) {
-    evk::destroyHongmengPlatform(platform);
+void svpDestroyHongmengPlatform(svp::IPlatform* platform) {
+    svp::destroyHongmengPlatform(platform);
 }
 } // extern "C"

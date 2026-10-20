@@ -8,7 +8,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace evk::gpu {
+namespace svp::gpu {
 
 class VulkanContext;
 
@@ -138,4 +138,4 @@ private:
     VkSurfaceTransformFlagBitsKHR surfaceTransform_ = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
 };
 
-} // namespace evk::gpu
+} // namespace svp::gpu

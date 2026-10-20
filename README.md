@@ -33,7 +33,7 @@ samples/                           # 每个子目录是一个完整 App（业务
    └─ hongmeng/                    # 鸿蒙 Hvigor 工程
 ```
 
-依赖方向保持为 **App → core ← platform**。平台桥接层只调用 `evk::IApp`，
+依赖方向保持为 **App → core ← platform**。平台桥接层只调用 `svp::IApp`，
 不得包含具体 App 头文件。各端壳中的 Java、ArkTS、Objective-C 仅承担系统要求的
 壳装配，不写 App 业务。项目只面向 Android、鸿蒙和 iOS。
 
@@ -47,13 +47,13 @@ samples/                           # 每个子目录是一个完整 App（业务
 
 ## 核心架构
 
-- **`evk::IApp`**（`core/src/app.h`）：App 公共接口；平台宿主在每帧调用
+- **`svp::IApp`**（`core/src/app.h`）：App 公共接口；平台宿主在每帧调用
   `onFrame`，具体实现由各 App 的 `createApp()` 提供。
-- **`evk::IPlatform`**（`core/src/render_platform.h`）：创建 `VkSurfaceKHR`、
+- **`svp::IPlatform`**（`core/src/render_platform.h`）：创建 `VkSurfaceKHR`、
   查询绘制区尺寸；MoltenVK（iOS）的额外要求也经可选钩子声明。
-- **`evk::IRasterSurface`**（`core/src/raster_surface.h`）：渲染器接口，
+- **`svp::IRasterSurface`**（`core/src/raster_surface.h`）：渲染器接口，
   平台壳只依赖它，不感知 Vulkan 实现。
-- **`evk::Renderer`**（`core/src/vulkan_renderer.*`）：帧编排
+- **`svp::Renderer`**（`core/src/vulkan_renderer.*`）：帧编排
   acquire → 上传顶点 → 录制 → 提交 → present；含 surface 旋转补偿、
   swapchain 重建重试、保活挂起/恢复。
 - **gpu/ 子模块**：`VulkanContext`（instance/设备）、`Swapchain`
@@ -68,7 +68,9 @@ GPU 顶点插值免费得到渐变。SPIR-V 在构建期由 `glslc` 编译并内
 
 C++ 日志会保留各端终端输出，并经有界异步队列写入应用私有日志文件，
 兼顾问题复现与高频业务场景。引擎模块、资源所有权、帧流程、简化点和日志
-获取方式，详见 [docs/engine-core.md](docs/engine-core.md)。
+获取方式，详见 [docs/engine-core.md](docs/engine-core.md)。三端从进程启动
+到每帧上屏的完整时序图，见
+[docs/startup-sequence.md](docs/startup-sequence.md)。
 
 ## 构建与打开 App
 
@@ -102,13 +104,13 @@ samples/triangle/android/app/build/outputs/apk/debug/app-debug.apk
 brew install cmake shaderc
 ```
 
-用 Xcode 打开 `samples/triangle/ios/EVKApp.xcodeproj`，或命令行做无签名
+用 Xcode 打开 `samples/triangle/ios/SVPApp.xcodeproj`，或命令行做无签名
 编译验证：
 
 ```bash
 xcodebuild \
-  -project samples/triangle/ios/EVKApp.xcodeproj \
-  -scheme EVKApp -configuration Debug \
+  -project samples/triangle/ios/SVPApp.xcodeproj \
+  -scheme SVPApp -configuration Debug \
   -sdk iphoneos -destination generic/platform=iOS \
   CODE_SIGNING_ALLOWED=NO build
 ```

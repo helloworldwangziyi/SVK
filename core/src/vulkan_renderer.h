@@ -19,7 +19,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace evk {
+namespace svp {
 
 /**
  * @brief 极简自包含的 Vulkan 渲染器。
@@ -123,4 +123,4 @@ private:
     static constexpr uint32_t kInitialVertexCapacity = 8192;
 };
 
-} // namespace evk
+} // namespace svp

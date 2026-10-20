@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <memory>
 
-namespace evk {
+namespace svp {
 
 namespace ui {
 class Canvas;
@@ -23,4 +23,4 @@ public:
 
 std::unique_ptr<IApp> createApp();
 
-} // namespace evk
+} // namespace svp

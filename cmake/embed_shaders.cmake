@@ -80,7 +80,7 @@ file(WRITE "${OUTPUT_HEADER}" [==[
 
 #include <cstdint>
 
-namespace evk::assets {
+namespace svp::assets {
 
 ]==]
 )
@@ -96,7 +96,7 @@ file(APPEND "${OUTPUT_HEADER}" "${frag_words}")
 file(APPEND "${OUTPUT_HEADER}" [==[
 };
 
-} // namespace evk::assets
+} // namespace svp::assets
 ]==]
 )
 

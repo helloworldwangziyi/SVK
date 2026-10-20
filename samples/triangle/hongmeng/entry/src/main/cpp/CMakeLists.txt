@@ -8,55 +8,55 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # 仓库根目录（本文件位于 samples/triangle/hongmeng/entry/src/main/cpp/）
-get_filename_component(EVK_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../../../../.." ABSOLUTE)
-set(EVK_APP_DIR "${EVK_ROOT}/samples/triangle")
-set(EVK_APP_SOURCES
-    "${EVK_APP_DIR}/app.cpp"
+get_filename_component(SVP_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../../../../.." ABSOLUTE)
+set(SVP_APP_DIR "${SVP_ROOT}/samples/triangle")
+set(SVP_APP_SOURCES
+    "${SVP_APP_DIR}/app.cpp"
 )
 
 find_program(GLSLC_EXECUTABLE glslc REQUIRED)
 
-set(EVK_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
-set(EVK_SHADER_HEADER "${EVK_GENERATED_DIR}/assets/ui_shaders.h")
-file(MAKE_DIRECTORY "${EVK_GENERATED_DIR}/assets")
+set(SVP_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
+set(SVP_SHADER_HEADER "${SVP_GENERATED_DIR}/assets/ui_shaders.h")
+file(MAKE_DIRECTORY "${SVP_GENERATED_DIR}/assets")
 
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-    "${EVK_ROOT}/shaders/ui_vertex.vert"
-    "${EVK_ROOT}/shaders/ui_fragment.frag"
-    "${EVK_ROOT}/cmake/embed_shaders.cmake"
+    "${SVP_ROOT}/shaders/ui_vertex.vert"
+    "${SVP_ROOT}/shaders/ui_fragment.frag"
+    "${SVP_ROOT}/cmake/embed_shaders.cmake"
 )
 
 execute_process(
     COMMAND "${CMAKE_COMMAND}"
             -DGLSLC_EXECUTABLE=${GLSLC_EXECUTABLE}
             -DSHADER_NAME=ui
-            -DVERT_SRC=${EVK_ROOT}/shaders/ui_vertex.vert
-            -DFRAG_SRC=${EVK_ROOT}/shaders/ui_fragment.frag
-            -DOUTPUT_HEADER=${EVK_SHADER_HEADER}
-            -P "${EVK_ROOT}/cmake/embed_shaders.cmake"
+            -DVERT_SRC=${SVP_ROOT}/shaders/ui_vertex.vert
+            -DFRAG_SRC=${SVP_ROOT}/shaders/ui_fragment.frag
+            -DOUTPUT_HEADER=${SVP_SHADER_HEADER}
+            -P "${SVP_ROOT}/cmake/embed_shaders.cmake"
     COMMAND_ERROR_IS_FATAL ANY
 )
 
 add_library(estarx_vulkan SHARED
-    ${EVK_APP_SOURCES}
-    ${EVK_ROOT}/platform/hongmeng/cpp/hongmeng_napi_bridge.cpp
-    ${EVK_ROOT}/platform/hongmeng/cpp/hongmeng_vulkan_platform.cpp
-    ${EVK_ROOT}/core/src/vulkan_renderer.cpp
-    ${EVK_ROOT}/core/src/gpu/vulkan_context.cpp
-    ${EVK_ROOT}/core/src/gpu/swapchain.cpp
-    ${EVK_ROOT}/core/src/gpu/ui_pipeline.cpp
-    ${EVK_ROOT}/core/src/gpu/texture_cache.cpp
-    ${EVK_ROOT}/core/src/ui/canvas.cpp
+    ${SVP_APP_SOURCES}
+    ${SVP_ROOT}/platform/hongmeng/cpp/hongmeng_napi_bridge.cpp
+    ${SVP_ROOT}/platform/hongmeng/cpp/hongmeng_vulkan_platform.cpp
+    ${SVP_ROOT}/core/src/vulkan_renderer.cpp
+    ${SVP_ROOT}/core/src/gpu/vulkan_context.cpp
+    ${SVP_ROOT}/core/src/gpu/swapchain.cpp
+    ${SVP_ROOT}/core/src/gpu/ui_pipeline.cpp
+    ${SVP_ROOT}/core/src/gpu/texture_cache.cpp
+    ${SVP_ROOT}/core/src/ui/canvas.cpp
 )
 
 target_include_directories(estarx_vulkan
     PRIVATE
-        ${EVK_ROOT}/core/src
-        ${EVK_ROOT}
-        ${EVK_APP_DIR}
-        ${EVK_ROOT}/third_party/spdlog/include
-        ${EVK_ROOT}/third_party/glm
-        ${EVK_GENERATED_DIR}
+        ${SVP_ROOT}/core/src
+        ${SVP_ROOT}
+        ${SVP_APP_DIR}
+        ${SVP_ROOT}/third_party/spdlog/include
+        ${SVP_ROOT}/third_party/glm
+        ${SVP_GENERATED_DIR}
 )
 
 if (OHOS)

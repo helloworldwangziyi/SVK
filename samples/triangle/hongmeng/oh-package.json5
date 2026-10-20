@@ -1,6 +1,6 @@
 {
   "modelVersion": "5.0.0",
-  "description": "Triangle HarmonyOS app generated from the shared EVK host.",
+  "description": "Triangle HarmonyOS app generated from the shared SVP host.",
   "dependencies": {},
   "devDependencies": {}
 }

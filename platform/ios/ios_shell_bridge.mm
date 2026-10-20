@@ -22,14 +22,14 @@
 
 // ios_vulkan_platform.mm 以 C 链接导出的工厂函数（与 Android 同款约定）：
 // bridge 只需声明原型即可调用，无需知道 IosPlatform 类的布局。
-extern "C" evk::IPlatform* evkCreateIosPlatform(const void* layer);
-extern "C" void evkDestroyIosPlatform(evk::IPlatform* platform);
+extern "C" svp::IPlatform* svpCreateIosPlatform(const void* layer);
+extern "C" void svpDestroyIosPlatform(svp::IPlatform* platform);
 
-// App 与渲染器随引擎创建、evkIosShutdown 销毁；surface 挂起时保留。
-// evkIosInit 建/热恢复、evkIosSuspend 挂起。全部在主线程访问，无锁。
-static std::unique_ptr<evk::IApp> g_app;
-static evk::IRasterSurface* g_renderer = nullptr;
-static evk::IPlatform* g_platform = nullptr;
+// App 与渲染器随引擎创建、svpIosShutdown 销毁；surface 挂起时保留。
+// svpIosInit 建/热恢复、svpIosSuspend 挂起。全部在主线程访问，无锁。
+static std::unique_ptr<svp::IApp> g_app;
+static svp::IRasterSurface* g_renderer = nullptr;
+static svp::IPlatform* g_platform = nullptr;
 static uint32_t g_width = 0;
 static uint32_t g_height = 0;
 static std::string g_reportedLogFile;
@@ -53,74 +53,74 @@ static void ensureLogger() {
         logger = spdlog::stdout_logger_mt("estarx-vulkan");
     }
 
-    evk::log::LogFileConfig config;
+    svp::log::LogFileConfig config;
     config.directory = logDirectory();
     if (config.directory.empty()) {
-        evk::log::init(logger);
+        svp::log::init(logger);
         return;
     }
 
     std::string filePath;
-    if (!evk::log::initWithFile(logger, config, &filePath)) {
+    if (!svp::log::initWithFile(logger, config, &filePath)) {
         return;
     }
     if (g_reportedLogFile != filePath) {
         g_reportedLogFile = filePath;
-        EVK_LOGI("log", "file_started platform=ios path={}", filePath);
+        SVP_LOGI("log", "file_started platform=ios path={}", filePath);
     }
 }
 
-void evkIosInit(const void* layer) {
+void svpIosInit(const void* layer) {
     ensureLogger();
 
     if (g_renderer) {
         // 保活热恢复：引擎级资源（设备/纹理/命令设施）仍在，只按新 layer
         // 重建 surface 级资源；失败则全量拆除，落到下面的冷启动兜底。
-        evk::IPlatform* resumed = evkCreateIosPlatform(layer);
+        svp::IPlatform* resumed = svpCreateIosPlatform(layer);
         if (resumed && g_renderer->resumeSurface(resumed)) {
-            evkDestroyIosPlatform(g_platform);
+            svpDestroyIosPlatform(g_platform);
             g_platform = resumed;
-            EVK_LOGI("ios", "engine_resumed renderer=vulkan");
+            SVP_LOGI("ios", "engine_resumed renderer=vulkan");
             return;
         }
-        EVK_LOGE("ios", "engine_resume_failed action=cold_start");
+        SVP_LOGE("ios", "engine_resume_failed action=cold_start");
         if (resumed) {
-            evkDestroyIosPlatform(resumed);
+            svpDestroyIosPlatform(resumed);
         }
         delete g_renderer;
         g_renderer = nullptr;
-        evkDestroyIosPlatform(g_platform);
+        svpDestroyIosPlatform(g_platform);
         g_platform = nullptr;
     }
 
-    g_platform = evkCreateIosPlatform(layer);
+    g_platform = svpCreateIosPlatform(layer);
     if (!g_platform) {
-        EVK_LOGE("ios", "engine_start_failed phase=create_platform");
+        SVP_LOGE("ios", "engine_start_failed phase=create_platform");
         return;
     }
 
-    g_renderer = evk::createRasterSurface(g_platform).release();
+    g_renderer = svp::createRasterSurface(g_platform).release();
     if (!g_renderer->initialize()) {
-        // 失败时按创建的反序清理干净，保证下次 evkIosInit 能干净重试。
-        EVK_LOGE("ios", "engine_start_failed phase=initialize_renderer");
+        // 失败时按创建的反序清理干净，保证下次 svpIosInit 能干净重试。
+        SVP_LOGE("ios", "engine_start_failed phase=initialize_renderer");
         delete g_renderer;
         g_renderer = nullptr;
-        evkDestroyIosPlatform(g_platform);
+        svpDestroyIosPlatform(g_platform);
         g_platform = nullptr;
         return;
     }
 
     if (!g_app) {
-        g_app = evk::createApp();
+        g_app = svp::createApp();
     }
 
     g_platform->getSurfaceSize(&g_width, &g_height);
     g_renderer->setSize(g_width, g_height);
-    EVK_LOGI("ios", "engine_started renderer=vulkan width={} height={}", g_width,
+    SVP_LOGI("ios", "engine_started renderer=vulkan width={} height={}", g_width,
              g_height);
 }
 
-void evkIosResize(int32_t width, int32_t height) {
+void svpIosResize(int32_t width, int32_t height) {
     g_width = static_cast<uint32_t>(width);
     g_height = static_cast<uint32_t>(height);
     if (g_renderer) {
@@ -128,38 +128,38 @@ void evkIosResize(int32_t width, int32_t height) {
     }
 }
 
-void evkIosBeginFrame(int64_t frameTimeNanos) {
+void svpIosBeginFrame(int64_t frameTimeNanos) {
     if (!g_app || !g_renderer) {
         return;
     }
     const double timeSeconds = static_cast<double>(frameTimeNanos) * 1e-9;
-    evk::ui::Canvas canvas;
-    const evk::AppFrameContext context{g_width, g_height, timeSeconds};
+    svp::ui::Canvas canvas;
+    const svp::AppFrameContext context{g_width, g_height, timeSeconds};
     g_app->onFrame(canvas, context);
     g_renderer->render(canvas);
 }
 
-void evkIosSuspend(void) {
+void svpIosSuspend(void) {
     if (g_renderer) {
         g_renderer->suspendSurface();
     }
     if (g_platform) {
-        evkDestroyIosPlatform(g_platform);
+        svpDestroyIosPlatform(g_platform);
         g_platform = nullptr;
     }
-    EVK_LOGI("ios", "engine_suspended renderer=vulkan");
-    evk::log::flush();
+    SVP_LOGI("ios", "engine_suspended renderer=vulkan");
+    svp::log::flush();
 }
 
-void evkIosShutdown(void) {
+void svpIosShutdown(void) {
     g_app.reset();
     delete g_renderer;
     g_renderer = nullptr;
     if (g_platform) {
-        evkDestroyIosPlatform(g_platform);
+        svpDestroyIosPlatform(g_platform);
         g_platform = nullptr;
     }
     g_width = g_height = 0;
-    EVK_LOGI("ios", "engine_stopped renderer=vulkan");
-    evk::log::flush();
+    SVP_LOGI("ios", "engine_stopped renderer=vulkan");
+    svp::log::flush();
 }

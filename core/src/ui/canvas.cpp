@@ -4,7 +4,7 @@
  */
 #include "ui/canvas.h"
 
-namespace evk::ui {
+namespace svp::ui {
 
 void Canvas::clear() {
     vertices_.clear();
@@ -53,4 +53,4 @@ void Canvas::append(const Rect& clip, const UiVertex* verts, size_t count) {
     vertices_.insert(vertices_.end(), verts, verts + count);
 }
 
-} // namespace evk::ui
+} // namespace svp::ui
