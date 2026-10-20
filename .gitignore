@@ -21,3 +21,6 @@ oh_modules/
 
 # IDE 本机工程配置
 .idea/
+
+# clangd 索引缓存
+.cache/
