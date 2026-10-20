@@ -1,0 +1,488 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		EC0000000000000000000050 /* main.m in Sources */ = {isa = PBXBuildFile; fileRef = EC0000000000000000000020 /* main.m */; };
+		EC0000000000000000000051 /* AppDelegate.m in Sources */ = {isa = PBXBuildFile; fileRef = EC0000000000000000000022 /* AppDelegate.m */; };
+		EC0000000000000000000052 /* ViewController.mm in Sources */ = {isa = PBXBuildFile; fileRef = EC0000000000000000000024 /* ViewController.mm */; };
+		EC0000000000000000000053 /* ios_shell_bridge.mm in Sources */ = {isa = PBXBuildFile; fileRef = EC0000000000000000000027 /* ios_shell_bridge.mm */; };
+		EC0000000000000000000054 /* ios_vulkan_platform.mm in Sources */ = {isa = PBXBuildFile; fileRef = EC0000000000000000000028 /* ios_vulkan_platform.mm */; };
+		EC0000000000000000000055 /* vulkan_renderer.cpp in Sources */ = {isa = PBXBuildFile; fileRef = EC000000000000000000002C /* vulkan_renderer.cpp */; };
+		EC0000000000000000000056 /* vulkan_context.cpp in Sources */ = {isa = PBXBuildFile; fileRef = EC000000000000000000002E /* vulkan_context.cpp */; };
+		EC0000000000000000000057 /* swapchain.cpp in Sources */ = {isa = PBXBuildFile; fileRef = EC0000000000000000000030 /* swapchain.cpp */; };
+		EC0000000000000000000058 /* ui_pipeline.cpp in Sources */ = {isa = PBXBuildFile; fileRef = EC0000000000000000000032 /* ui_pipeline.cpp */; };
+		EC0000000000000000000059 /* texture_cache.cpp in Sources */ = {isa = PBXBuildFile; fileRef = EC0000000000000000000034 /* texture_cache.cpp */; };
+		EC000000000000000000005A /* canvas.cpp in Sources */ = {isa = PBXBuildFile; fileRef = EC0000000000000000000036 /* canvas.cpp */; };
+		ECB000000000000000000001 /* app.cpp in Sources */ = {isa = PBXBuildFile; fileRef = ECA000000000000000000001 /* app.cpp */; };
+
+		EC000000000000000000005B /* MoltenVK.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = EC0000000000000000000039 /* MoltenVK.xcframework */; };
+		EC000000000000000000005C /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = EC000000000000000000003A /* UIKit.framework */; };
+		EC000000000000000000005D /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = EC000000000000000000003B /* Foundation.framework */; };
+		EC000000000000000000005E /* QuartzCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = EC000000000000000000003C /* QuartzCore.framework */; };
+		EC000000000000000000005F /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = EC000000000000000000003D /* Metal.framework */; };
+		EC0000000000000000000060 /* CoreGraphics.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = EC000000000000000000003E /* CoreGraphics.framework */; };
+		EC0000000000000000000061 /* IOSurface.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = EC000000000000000000003F /* IOSurface.framework */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		EC0000000000000000000020 /* main.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = main.m; sourceTree = "<group>"; };
+		EC0000000000000000000021 /* AppDelegate.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = AppDelegate.h; sourceTree = "<group>"; };
+		EC0000000000000000000022 /* AppDelegate.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = AppDelegate.m; sourceTree = "<group>"; };
+		EC0000000000000000000023 /* ViewController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ViewController.h; sourceTree = "<group>"; };
+		EC0000000000000000000024 /* ViewController.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = ViewController.mm; sourceTree = "<group>"; };
+		EC0000000000000000000025 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		EC0000000000000000000026 /* ios_shell_bridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ios_shell_bridge.h; sourceTree = "<group>"; };
+		EC0000000000000000000027 /* ios_shell_bridge.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = ios_shell_bridge.mm; sourceTree = "<group>"; };
+		EC0000000000000000000028 /* ios_vulkan_platform.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = ios_vulkan_platform.mm; sourceTree = "<group>"; };
+		EC0000000000000000000029 /* log.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = log.h; sourceTree = "<group>"; };
+		EC000000000000000000002A /* raster_surface.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = raster_surface.h; sourceTree = "<group>"; };
+		EC000000000000000000002B /* render_platform.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = render_platform.h; sourceTree = "<group>"; };
+		EC000000000000000000002C /* vulkan_renderer.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = vulkan_renderer.cpp; sourceTree = "<group>"; };
+		EC000000000000000000002D /* vulkan_renderer.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = vulkan_renderer.h; sourceTree = "<group>"; };
+		EC000000000000000000002E /* vulkan_context.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = vulkan_context.cpp; sourceTree = "<group>"; };
+		EC000000000000000000002F /* vulkan_context.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = vulkan_context.h; sourceTree = "<group>"; };
+		EC0000000000000000000030 /* swapchain.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = swapchain.cpp; sourceTree = "<group>"; };
+		EC0000000000000000000031 /* swapchain.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = swapchain.h; sourceTree = "<group>"; };
+		EC0000000000000000000032 /* ui_pipeline.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = ui_pipeline.cpp; sourceTree = "<group>"; };
+		EC0000000000000000000033 /* ui_pipeline.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ui_pipeline.h; sourceTree = "<group>"; };
+		EC0000000000000000000034 /* texture_cache.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = texture_cache.cpp; sourceTree = "<group>"; };
+		EC0000000000000000000035 /* texture_cache.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = texture_cache.h; sourceTree = "<group>"; };
+		EC0000000000000000000036 /* canvas.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = canvas.cpp; sourceTree = "<group>"; };
+		EC0000000000000000000037 /* canvas.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = canvas.h; sourceTree = "<group>"; };
+		ECA000000000000000000001 /* app.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = "app.cpp"; sourceTree = "<group>"; };
+
+		EC0000000000000000000042 /* app.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = app.h; sourceTree = "<group>"; };
+		EC0000000000000000000039 /* MoltenVK.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = "$(SRCROOT)/../../../third_party/moltenvk/MoltenVK.xcframework"; sourceTree = "<group>"; };
+		EC000000000000000000003A /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
+		EC000000000000000000003B /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = System/Library/Frameworks/Foundation.framework; sourceTree = SDKROOT; };
+		EC000000000000000000003C /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
+		EC000000000000000000003D /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
+		EC000000000000000000003E /* CoreGraphics.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreGraphics.framework; path = System/Library/Frameworks/CoreGraphics.framework; sourceTree = SDKROOT; };
+		EC000000000000000000003F /* IOSurface.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = IOSurface.framework; path = System/Library/Frameworks/IOSurface.framework; sourceTree = SDKROOT; };
+		EC0000000000000000000040 /* "Triangle.app" */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Triangle.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		EC0000000000000000000072 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				EC000000000000000000005B /* MoltenVK.xcframework in Frameworks */,
+				EC000000000000000000005C /* UIKit.framework in Frameworks */,
+				EC000000000000000000005D /* Foundation.framework in Frameworks */,
+				EC000000000000000000005E /* QuartzCore.framework in Frameworks */,
+				EC000000000000000000005F /* Metal.framework in Frameworks */,
+				EC0000000000000000000060 /* CoreGraphics.framework in Frameworks */,
+				EC0000000000000000000061 /* IOSurface.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		EC0000000000000000000010 = {
+			isa = PBXGroup;
+			children = (
+				EC0000000000000000000011 /* EVKApp */,
+				EC0000000000000000000012 /* platform · ios */,
+				EC0000000000000000000013 /* core */,
+				EC0000000000000000000016 /* App */,
+				EC0000000000000000000017 /* Frameworks */,
+				EC0000000000000000000018 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		EC0000000000000000000011 /* EVKApp */ = {
+			isa = PBXGroup;
+			children = (
+				EC0000000000000000000020 /* main.m */,
+				EC0000000000000000000021 /* AppDelegate.h */,
+				EC0000000000000000000022 /* AppDelegate.m */,
+				EC0000000000000000000023 /* ViewController.h */,
+				EC0000000000000000000024 /* ViewController.mm */,
+				EC0000000000000000000025 /* Info.plist */,
+			);
+			path = EVKApp;
+			sourceTree = "<group>";
+		};
+		EC0000000000000000000012 /* platform · ios */ = {
+			isa = PBXGroup;
+			children = (
+				EC0000000000000000000026 /* ios_shell_bridge.h */,
+				EC0000000000000000000027 /* ios_shell_bridge.mm */,
+				EC0000000000000000000028 /* ios_vulkan_platform.mm */,
+			);
+			name = "platform · ios";
+			path = "$(SRCROOT)/../../../platform/ios";
+			sourceTree = "<group>";
+		};
+		EC0000000000000000000013 /* core */ = {
+			isa = PBXGroup;
+			children = (
+				EC0000000000000000000042 /* app.h */,
+				EC0000000000000000000029 /* log.h */,
+				EC000000000000000000002A /* raster_surface.h */,
+				EC000000000000000000002B /* render_platform.h */,
+				EC000000000000000000002C /* vulkan_renderer.cpp */,
+				EC000000000000000000002D /* vulkan_renderer.h */,
+				EC0000000000000000000014 /* gpu */,
+				EC0000000000000000000015 /* ui */,
+			);
+			name = core;
+			path = "$(SRCROOT)/../../../core/src";
+			sourceTree = "<group>";
+		};
+		EC0000000000000000000014 /* gpu */ = {
+			isa = PBXGroup;
+			children = (
+				EC000000000000000000002E /* vulkan_context.cpp */,
+				EC000000000000000000002F /* vulkan_context.h */,
+				EC0000000000000000000030 /* swapchain.cpp */,
+				EC0000000000000000000031 /* swapchain.h */,
+				EC0000000000000000000032 /* ui_pipeline.cpp */,
+				EC0000000000000000000033 /* ui_pipeline.h */,
+				EC0000000000000000000034 /* texture_cache.cpp */,
+				EC0000000000000000000035 /* texture_cache.h */,
+			);
+			path = gpu;
+			sourceTree = "<group>";
+		};
+		EC0000000000000000000015 /* ui */ = {
+			isa = PBXGroup;
+			children = (
+				EC0000000000000000000036 /* canvas.cpp */,
+				EC0000000000000000000037 /* canvas.h */,
+			);
+			path = ui;
+			sourceTree = "<group>";
+		};
+		EC0000000000000000000016 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				ECA000000000000000000001 /* app.cpp */,
+
+			);
+			name = "App · Triangle";
+			path = "$(SRCROOT)/..";
+			sourceTree = "<group>";
+		};
+		EC0000000000000000000017 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				EC0000000000000000000039 /* MoltenVK.xcframework */,
+				EC000000000000000000003A /* UIKit.framework */,
+				EC000000000000000000003B /* Foundation.framework */,
+				EC000000000000000000003C /* QuartzCore.framework */,
+				EC000000000000000000003D /* Metal.framework */,
+				EC000000000000000000003E /* CoreGraphics.framework */,
+				EC000000000000000000003F /* IOSurface.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		EC0000000000000000000018 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				EC0000000000000000000040 /* "Triangle.app" */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		EC0000000000000000000080 /* EVKApp */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = EC00000000000000000000B1 /* Build configuration list for PBXNativeTarget "EVKApp" */;
+			buildPhases = (
+				EC0000000000000000000070 /* Embed Shaders (glslc) */,
+				EC0000000000000000000071 /* Sources */,
+				EC0000000000000000000072 /* Frameworks */,
+				EC0000000000000000000073 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = EVKApp;
+			productName = "Triangle";
+			productReference = EC0000000000000000000040 /* "Triangle.app" */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		EC0000000000000000000090 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastUpgradeCheck = 1640;
+				TargetAttributes = {
+					EC0000000000000000000080 = {
+						CreatedOnToolsVersion = 16.4;
+					};
+				};
+			};
+			buildConfigurationList = EC00000000000000000000B0 /* Build configuration list for PBXProject "EVKApp" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = EC0000000000000000000010;
+			productRefGroup = EC0000000000000000000018 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				EC0000000000000000000080 /* EVKApp */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		EC0000000000000000000073 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		EC0000000000000000000070 /* Embed Shaders (glslc) */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/../../../shaders/ui_vertex.vert",
+				"$(SRCROOT)/../../../shaders/ui_fragment.frag",
+				"$(SRCROOT)/../../../cmake/embed_shaders.cmake",
+			);
+			name = "Embed Shaders (glslc)";
+			outputPaths = (
+				"$(DERIVED_FILE_DIR)/generated/assets/ui_shaders.h",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -e\n# Homebrew 不在 Xcode 构建环境的默认 PATH 里，补齐常见安装位置。\nexport PATH=\"/opt/homebrew/bin:/usr/local/bin:$PATH\"\nEVK_ROOT=\"${SRCROOT}/../../..\"\nGLSLC=\"$(command -v glslc || true)\"\nif [ -z \"$GLSLC\" ]; then\n    echo \"error: 未找到 glslc（brew install shaderc，或安装 Vulkan SDK）\" >&2\n    exit 1\nfi\nCMAKE_BIN=\"$(command -v cmake || true)\"\nif [ -z \"$CMAKE_BIN\" ]; then\n    echo \"error: 未找到 cmake（brew install cmake）\" >&2\n    exit 1\nfi\nmkdir -p \"$DERIVED_FILE_DIR/generated\"\n\"$CMAKE_BIN\" \\\n    -DGLSLC_EXECUTABLE=\"$GLSLC\" \\\n    -DSHADER_NAME=ui \\\n    -DVERT_SRC=\"$EVK_ROOT/shaders/ui_vertex.vert\" \\\n    -DFRAG_SRC=\"$EVK_ROOT/shaders/ui_fragment.frag\" \\\n    -DOUTPUT_HEADER=\"$DERIVED_FILE_DIR/generated/assets/ui_shaders.h\" \\\n    -P \"$EVK_ROOT/cmake/embed_shaders.cmake\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		EC0000000000000000000071 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				EC0000000000000000000050 /* main.m in Sources */,
+				EC0000000000000000000051 /* AppDelegate.m in Sources */,
+				EC0000000000000000000052 /* ViewController.mm in Sources */,
+				EC0000000000000000000053 /* ios_shell_bridge.mm in Sources */,
+				EC0000000000000000000054 /* ios_vulkan_platform.mm in Sources */,
+				EC0000000000000000000055 /* vulkan_renderer.cpp in Sources */,
+				EC0000000000000000000056 /* vulkan_context.cpp in Sources */,
+				EC0000000000000000000057 /* swapchain.cpp in Sources */,
+				EC0000000000000000000058 /* ui_pipeline.cpp in Sources */,
+				EC0000000000000000000059 /* texture_cache.cpp in Sources */,
+				EC000000000000000000005A /* canvas.cpp in Sources */,
+				ECB000000000000000000001 /* app.cpp in Sources */,
+
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		EC00000000000000000000A0 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "c++17";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+			};
+			name = Debug;
+		};
+		EC00000000000000000000A1 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "c++17";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = iphoneos;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		EC00000000000000000000A2 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = JK29957Z9Z;
+				GENERATE_INFOPLIST_FILE = NO;
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/../../../core/src",
+					"$(SRCROOT)/../../..",
+					"$(SRCROOT)/../../../third_party/glm",
+					"$(SRCROOT)/../../../third_party/spdlog/include",
+					"$(SRCROOT)/../../../third_party/moltenvk/include",
+					"$(SRCROOT)/..",
+					"$(DERIVED_FILE_DIR)/generated",
+				);
+				INFOPLIST_FILE = EVKApp/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0.0;
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-ObjC",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.estarx.triangle;
+				PRODUCT_NAME = "Triangle";
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		EC00000000000000000000A3 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = JK29957Z9Z;
+				GENERATE_INFOPLIST_FILE = NO;
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/../../../core/src",
+					"$(SRCROOT)/../../..",
+					"$(SRCROOT)/../../../third_party/glm",
+					"$(SRCROOT)/../../../third_party/spdlog/include",
+					"$(SRCROOT)/../../../third_party/moltenvk/include",
+					"$(SRCROOT)/..",
+					"$(DERIVED_FILE_DIR)/generated",
+				);
+				INFOPLIST_FILE = EVKApp/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0.0;
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-ObjC",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.estarx.triangle;
+				PRODUCT_NAME = "Triangle";
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		EC00000000000000000000B0 /* Build configuration list for PBXProject "EVKApp" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				EC00000000000000000000A0 /* Debug */,
+				EC00000000000000000000A1 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		EC00000000000000000000B1 /* Build configuration list for PBXNativeTarget "EVKApp" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				EC00000000000000000000A2 /* Debug */,
+				EC00000000000000000000A3 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = EC0000000000000000000090 /* Project object */;
+}

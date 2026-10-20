@@ -17,7 +17,7 @@
 //     不经过本类。
 //
 // VK_USE_PLATFORM_OHOS 由构建系统定义
-// （见 platform/hongmeng/host/.../CMakeLists.txt），
+// （见 samples/<app>/hongmeng/entry/src/main/cpp/CMakeLists.txt），
 // 定义后 vulkan.h 才会包含 vulkan_ohos.h，暴露 vkCreateSurfaceOHOS 等声明。
 // ============================================================================
 

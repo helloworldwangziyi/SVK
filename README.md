@@ -6,48 +6,45 @@ surface 与帧节奏，具体 App 业务全部由平台无关的 C++ 代码实�
 ## 项目结构与依赖边界
 
 ```
-app                                # 统一的 App 生成、构建和打开入口
-cmake/generate_app.cmake           # 读取 app.json，生成各端工程
-dist/                              # 最终 App 产物（构建后生成，不入库）
-
 core/                              # C++ SDK：公共接口、绘制与渲染
-├─ src/app.h                       # IApp：平台宿主与 App 之间的通用接口
+├─ src/app.h                       # IApp：平台壳与 App 之间的通用接口
 ├─ src/render_platform.h           # IPlatform：Vulkan surface 平台抽象
 ├─ src/raster_surface.h            # IRasterSurface：渲染接口
 ├─ src/vulkan_renderer.*
 ├─ src/gpu/
 └─ src/ui/
 
-platform/                          # 各端平台适配、系统能力与共享宿主
+platform/                          # 各端平台适配源码（不含工程文件）
 ├─ android/
-│  ├─ cpp/ + java/                 # JNI、Surface 和共享 Java 组件
-│  └─ host/                        # 唯一的 Android Gradle 宿主模板
+│  ├─ cpp/                         # JNI、Vulkan 平台适配
+│  └─ java/                        # NativeBridge、VulkanSurfaceView
 ├─ hongmeng/
-│  ├─ cpp/                         # NAPI + HongmengPlatform
-│  └─ host/                        # 唯一的鸿蒙 Hvigor 宿主模板
+│  └─ cpp/                         # NAPI + HongmengPlatform
 └─ ios/
    ├─ ios_shell_bridge.*           # C 桥 + CAMetal + IosPlatform
-   └─ host/                        # 唯一的 iOS Xcode 宿主模板
+   └─ ios_vulkan_platform.mm
 
-samples/                           # 每个子目录只描述一个独立 App
+samples/                           # 每个子目录是一个完整 App（业务 + 三端工程）
 └─ triangle/
-   ├─ app.json                     # 名称、包名、版本和 C++ 源文件列表
    ├─ app.cpp                      # createApp：装配 TriangleApp
-   └─ triangle.h                   # C++ 三角形业务
+   ├─ triangle.h                   # C++ 三角形业务
+   ├─ app.json                     # App 元数据清单（仅说明用，不驱动构建）
+   ├─ android/                     # Android Gradle 工程
+   ├─ ios/                         # iOS Xcode 工程
+   └─ hongmeng/                    # 鸿蒙 Hvigor 工程
 ```
 
 依赖方向保持为 **App → core ← platform**。平台桥接层只调用 `evk::IApp`，
-不得包含具体 App 头文件。共享宿主中的 Java、ArkTS、Objective-C 仅承担系统要求的
-宿主装配，不写 App 业务。项目只面向 Android、鸿蒙和 iOS。
+不得包含具体 App 头文件。各端壳中的 Java、ArkTS、Objective-C 仅承担系统要求的
+壳装配，不写 App 业务。项目只面向 Android、鸿蒙和 iOS。
 
-目录职责、旧 `samples/android/` 的来历以及宿主生成流程，详见
+目录职责和各端工程的组织方式，详见
 [docs/project-structure.md](docs/project-structure.md)。
 
-新增 App 时只需建立 `samples/<app>/`，编写 `app.json` 和 C++ 源文件，并实现
-`evk::createApp()`；不需要复制三端工程，也不需要修改平台层。`app.json` 中的
-`identifier` 同时作为 Android applicationId、iOS Bundle ID 和鸿蒙 bundleName，
-`sources` 支持列出多个 `.cpp`。各端工程生成到 `build/apps/<app>/<platform>/`，
-属于可重建的派生产物，不应直接修改或提交。
+每个 App 自带一套三端原生工程，直接入库、直接维护。新增 App 时复制
+`samples/triangle/` 整套结构，替换 C++ 业务，并在三端工程各自修改名称、
+包名和版本号。工程按相对路径引用 `core/`、`platform/` 和 App 源码，
+移动仓库位置不影响构建。
 
 ## 核心架构
 
@@ -76,40 +73,25 @@ C++ 日志会保留各端终端输出，并经有界异步队列写入应用私�
 
 ## 构建与打开 App
 
-统一入口会根据 `samples/<app>/app.json` 重新生成对应工程：
-
-```bash
-./app build triangle android       # 生成并构建 Android APK
-./app build triangle ios           # 生成并执行 iOS 无签名 Debug 构建
-./app generate triangle hongmeng   # 只生成鸿蒙工程
-
-./app open triangle android        # 生成并用 Android Studio 打开
-./app open triangle ios            # 生成并用 Xcode 打开
-./app open triangle hongmeng       # 生成并用 DevEco Studio 打开
-```
-
-`open` 找不到对应 IDE 时会打印生成路径。需要真机签名和运行时，使用 `open`
-打开生成工程后按各端常规流程操作；直接修改生成目录会在下次生成时失去意义，
-应改 `app.json`、App 源码或 `platform/*/host` 模板。
-
-`build` 成功后会将可安装或可运行的最终产物收集到
-`dist/<app>/<platform>/` 并打印完整路径；`build/` 只保存生成工程和中间产物。
-两个目录都可删除并重新生成，不提交到版本库。
+各端工程就是常规原生工程，直接用对应 IDE 或命令行构建，没有生成步骤。
 
 ### Android
 
-Android Studio 应通过 `./app open triangle android` 打开，或手动选择
-`build/apps/triangle/android/`。仓库根目录和 `samples/` 都不是 Gradle 工程，
-旧的 `samples/android/` 已不再使用。
+用 Android Studio 打开 `samples/triangle/android/`，或命令行：
 
-需要 Android SDK、NDK 和 JDK 17+。macOS 入口会通过 `/usr/libexec/java_home`
-选择 JDK 17，其他环境使用当前 `JAVA_HOME`。若 SDK 不能自动发现，可在
-`platform/android/host/local.properties` 配置本机 `sdk.dir`（该文件不入库）。
+```bash
+cd samples/triangle/android
+export JAVA_HOME="$(/usr/libexec/java_home -v 17)"   # macOS 选择 JDK 17
+./gradlew assembleDebug
+```
+
+需要 Android SDK、NDK 和 JDK 17+。SDK 不能自动发现时，在
+`samples/triangle/android/local.properties` 配置本机 `sdk.dir`（该文件不入库）。
 
 APK 输出到：
 
 ```text
-dist/triangle/android/triangle-debug.apk
+samples/triangle/android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
 ### iOS
@@ -121,20 +103,39 @@ dist/triangle/android/triangle-debug.apk
 brew install cmake shaderc
 ```
 
-iOS 生成工程引用 `core/src`、`platform/ios` 和当前 App 的绝对源路径，
-不复制这些源码。`build` 使用真机 arm64 目标并关闭签名，仅用于编译验证；
-真机运行请用 `open` 打开 Xcode 后选择 Team。无签名 `.app` 输出到：
+用 Xcode 打开 `samples/triangle/ios/EVKApp.xcodeproj`，或命令行做无签名
+编译验证：
 
-```text
-dist/triangle/ios/Triangle.app
+```bash
+xcodebuild \
+  -project samples/triangle/ios/EVKApp.xcodeproj \
+  -scheme EVKApp -configuration Debug \
+  -sdk iphoneos -destination generic/platform=iOS \
+  CODE_SIGNING_ALLOWED=NO build
 ```
+
+工程按相对路径（`$(SRCROOT)/../../..`）引用 `core/`、`platform/ios` 和
+App 源码，不复制这些源码。真机运行请在 Xcode 中选择 Team。
 
 ### 鸿蒙
 
-`generate` 或 `open` 会生成完整 Hvigor 工程到
-`build/apps/triangle/hongmeng/`。在 DevEco Studio 的
+用 DevEco Studio 打开 `samples/triangle/hongmeng/`，在
 `File > Project Structure > Signing Configs` 配置签名后构建运行。
-当前统一入口不替代 DevEco 的鸿蒙构建流程，也不自动收集其构建产物。
+
+命令行也可以打出未签名 HAP（使用 DevEco 自带的 hvigor、SDK 与 JDK）：
+
+```bash
+cd samples/triangle/hongmeng
+export DEVECO_SDK_HOME=/Applications/DevEco-Studio.app/Contents/sdk
+export JAVA_HOME=/Applications/DevEco-Studio.app/Contents/jbr/Contents/Home
+/Applications/DevEco-Studio.app/Contents/tools/hvigor/bin/hvigorw assembleHap --no-daemon
+```
+
+未签名 HAP 输出到：
+
+```text
+samples/triangle/hongmeng/entry/build/default/outputs/default/
+```
 
 ## 与母项目的对应关系
 

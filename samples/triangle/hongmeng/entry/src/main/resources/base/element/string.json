@@ -1,0 +1,16 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "Triangle entry module"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "estarx 三角形"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "estarx 三角形"
+    }
+  ]
+}
