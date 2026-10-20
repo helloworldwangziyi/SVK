@@ -24,7 +24,6 @@ SVK/
 │  └─ triangle/
 │     ├─ app.cpp                    # 实现 evk::createApp()
 │     ├─ triangle.h                 # 三角形业务代码
-│     ├─ app.json                   # App 元数据（仅清单说明，不驱动构建）
 │     ├─ android/                   # Android Gradle 工程
 │     ├─ ios/                       # iOS Xcode 工程
 │     └─ hongmeng/                  # 鸿蒙 Hvigor 工程
@@ -32,8 +31,7 @@ SVK/
 ├─ test/                            # host 侧测试（经根 CMake 的 EVK_BUILD_TESTS 开关构建）
 │  └─ test_log.cpp                  # log 模块功能与性能测试
 │
-├─ build/                           # 根 CMake 的本机构建目录，不入库
-└─ dist/                            # 历史产物目录，不入库
+└─ build/                           # 根 CMake 的本机构建目录，不入库
 ```
 
 核心边界是：
@@ -116,8 +114,6 @@ Java、Objective-C 或 ArkTS 中分别复制一套业务逻辑。
      `versionName`，以及两处 `string.json` 的显示名。
 3. 如果重命名了 App 源文件，同步修改两个 CMakeLists 的 `EVK_APP_SOURCES`
    和 iOS 工程的 App 分组。
-
-`app.json` 不参与构建，只是这些元数据的一份速查清单，可改可删。
 
 ## 应该在哪里修改代码？
 

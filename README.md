@@ -28,7 +28,6 @@ samples/                           # 每个子目录是一个完整 App（业务
 └─ triangle/
    ├─ app.cpp                      # createApp：装配 TriangleApp
    ├─ triangle.h                   # C++ 三角形业务
-   ├─ app.json                     # App 元数据清单（仅说明用，不驱动构建）
    ├─ android/                     # Android Gradle 工程
    ├─ ios/                         # iOS Xcode 工程
    └─ hongmeng/                    # 鸿蒙 Hvigor 工程
