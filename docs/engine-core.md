@@ -410,10 +410,17 @@ svk::log::write（格式化正文并复制 log_msg）
 文件名为：
 
 ```text
-estarx-vulkan-YYYYMMDD-HHMMSS-<毫秒>.log
+estarx-vulkan-YYYYMMDD-HHMMSS-<毫秒>.log      # 主通道
+audit-YYYYMMDD-HHMMSS-<毫秒>.log              # 审计通道（独立文件）
 ```
 
 每次进程冷启动创建一个新文件。同一进程内 Surface 重建、Activity/View 恢复或重复初始化会复用现有文件，不会重复创建。文件 sink 由 spdlog 自动创建父目录；路径不可写或创建失败时自动回退为仅终端输出，并保留渲染初始化流程。
+
+单文件超过 `LogFileConfig::maxFileSizeBytes`（默认 10MB）后轮转为
+`name.N.log`，同次启动最多保留 `maxRotatedFiles` 份（默认 5）。
+`initWithFile` 创建新文件前会清理目录：同前缀且超过 `maxFileAgeDays`
+（默认 7 天，审计 30 天）的文件直接删除；同前缀总量超过 `maxTotalBytes`
+（默认 200MB，审计 50MB）时从最老删起，清理结果以一条 `log_pruned` 日志记录。
 
 三端初始化成功后会写一条启动日志，其中包含真实文件路径：
 

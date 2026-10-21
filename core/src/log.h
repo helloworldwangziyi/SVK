@@ -29,11 +29,13 @@
  * 限速窗口内压制的条数，在下一次放行时以 suppressed=N 附在正文末尾。
  */
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cctype>
 #include <cstddef>
 #include <ctime>
+#include <filesystem>
 #include <iomanip>
 #include <memory>
 #include <mutex>
@@ -46,6 +48,7 @@
 #include <spdlog/async.h>
 #include <spdlog/spdlog.h>
 #include <spdlog/sinks/basic_file_sink.h>
+#include <spdlog/sinks/rotating_file_sink.h>
 #include <spdlog/sinks/stdout_sinks.h>
 
 namespace svk {
@@ -63,6 +66,16 @@ struct LogFileConfig {
     size_t asyncThreadCount = 1;
     spdlog::async_overflow_policy asyncOverflowPolicy =
         spdlog::async_overflow_policy::overrun_oldest;
+    // 轮转：单文件超过 maxFileSizeBytes 切为 name.N.log，同次启动最多保留
+    // maxRotatedFiles 份轮转。
+    size_t maxFileSizeBytes = 10 * 1024 * 1024;
+    size_t maxRotatedFiles = 5;
+    // 清理：initWithFile 时删除同前缀的过期文件（maxFileAgeDays<=0 不按时间删），
+    // 总量超过 maxTotalBytes 时从最老删起（0=不限制）。审计文件单独配置。
+    size_t maxTotalBytes = 200ull * 1024 * 1024;
+    int maxFileAgeDays = 7;
+    size_t auditMaxTotalBytes = 50ull * 1024 * 1024;
+    int auditMaxFileAgeDays = 30;
 };
 
 /** 日志通道：引擎/业务共用默认 logger（可丢）；审计独立文件、同步直写（不丢）。 */
@@ -154,6 +167,59 @@ inline std::string makeLogFilePath(const LogFileConfig& config,
              << std::put_time(&local, "%Y%m%d-%H%M%S") << '-' << std::setfill('0')
              << std::setw(3) << millis.count() << ".log";
     return joinPath(config.directory, filename.str());
+}
+
+/**
+ * 清理日志目录：删除同前缀（含轮转后缀 name.N.log）的过期文件，
+ * 再按修改时间升序删到总量达标。在创建新文件之前调用，
+ * 因此不会误删本次启动的新文件。返回删除的文件数与字节数。
+ */
+inline void pruneLogDirectory(const std::string& directory,
+                              const std::string& prefix, size_t maxTotalBytes,
+                              int maxAgeDays, uint64_t* deletedFiles,
+                              uint64_t* deletedBytes) {
+    namespace fs = std::filesystem;
+    *deletedFiles = 0;
+    *deletedBytes = 0;
+    std::error_code ec;
+    if (!fs::is_directory(directory, ec)) {
+        return;
+    }
+    struct Item {
+        fs::path path;
+        uint64_t size;
+        fs::file_time_type mtime;
+    };
+    std::vector<Item> items;
+    uint64_t totalBytes = 0;
+    for (const auto& entry : fs::directory_iterator(directory, ec)) {
+        if (!entry.is_regular_file(ec)) {
+            continue;
+        }
+        if (entry.path().filename().string().rfind(prefix, 0) != 0) {
+            continue;
+        }
+        const uint64_t size = entry.file_size(ec);
+        items.push_back({entry.path(), size, fs::last_write_time(entry.path(), ec)});
+        totalBytes += size;
+    }
+    const auto now = fs::file_time_type::clock::now();
+    const auto maxAge = std::chrono::hours(24LL * maxAgeDays);
+    std::sort(items.begin(), items.end(),
+              [](const Item& a, const Item& b) { return a.mtime < b.mtime; });
+    for (const auto& item : items) {
+        const bool expired = maxAgeDays > 0 && now - item.mtime > maxAge;
+        const bool overTotal =
+            maxTotalBytes > 0 && totalBytes > maxTotalBytes;
+        if (!expired && !overTotal) {
+            continue;
+        }
+        if (fs::remove(item.path, ec)) {
+            ++*deletedFiles;
+            *deletedBytes += item.size;
+            totalBytes -= item.size;
+        }
+    }
 }
 
 /** 调用点级限速状态：每个 THROTTLE 宏展开在调用点自带一份 static。 */
@@ -327,11 +393,25 @@ inline bool initWithFile(const std::shared_ptr<spdlog::logger>& terminalLogger,
         return false;
     }
 
+    // 清理发生在创建新文件之前，不会误删本次启动的新文件。
+    uint64_t prunedFiles = 0;
+    uint64_t prunedBytes = 0;
+    detail::pruneLogDirectory(config.directory,
+                              detail::sanitizeFilePrefix(config.filePrefix),
+                              config.maxTotalBytes, config.maxFileAgeDays,
+                              &prunedFiles, &prunedBytes);
+    uint64_t prunedAuditFiles = 0;
+    uint64_t prunedAuditBytes = 0;
+    detail::pruneLogDirectory(config.directory,
+                              detail::sanitizeFilePrefix(config.auditFilePrefix),
+                              config.auditMaxTotalBytes, config.auditMaxFileAgeDays,
+                              &prunedAuditFiles, &prunedAuditBytes);
+
     const std::string filePath =
         detail::makeLogFilePath(config, config.filePrefix);
     try {
-        auto fileSink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(
-            filePath, false);
+        auto fileSink = std::make_shared<spdlog::sinks::rotating_file_sink_mt>(
+            filePath, config.maxFileSizeBytes, config.maxRotatedFiles);
         fileSink->set_pattern("%Y-%m-%d %H:%M:%S.%e [%l] [thread %t] %v");
         fileSink->set_level(config.fileLevel);
         sinks.push_back(fileSink);
@@ -368,8 +448,9 @@ inline bool initWithFile(const std::shared_ptr<spdlog::logger>& terminalLogger,
         // 终端 sink 与主通道共享，保证 logcat/控制台同样可见。
         const std::string auditFilePath =
             detail::makeLogFilePath(config, config.auditFilePrefix);
-        auto auditFileSink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(
-            auditFilePath, false);
+        auto auditFileSink =
+            std::make_shared<spdlog::sinks::rotating_file_sink_mt>(
+                auditFilePath, config.maxFileSizeBytes, config.maxRotatedFiles);
         auditFileSink->set_pattern("%Y-%m-%d %H:%M:%S.%e [%l] [thread %t] %v");
         auditFileSink->set_level(config.fileLevel);
         std::vector<spdlog::sink_ptr> auditSinks;
@@ -391,6 +472,12 @@ inline bool initWithFile(const std::shared_ptr<spdlog::logger>& terminalLogger,
 
         if (createdFilePath) {
             *createdFilePath = filePath;
+        }
+        if (prunedFiles + prunedAuditFiles > 0) {
+            spdlog::info(
+                "[svk][log][log_pruned files={} bytes={} audit_files={} "
+                "audit_bytes={}]",
+                prunedFiles, prunedBytes, prunedAuditFiles, prunedAuditBytes);
         }
         if (config.async) {
             spdlog::info(

@@ -44,6 +44,32 @@ static std::string findFileWithPrefix(const std::string& dir,
     return "";
 }
 
+static size_t countFilesWithPrefix(const std::string& dir,
+                                   const std::string& prefix) {
+    namespace fs = std::filesystem;
+    size_t count = 0;
+    for (const auto& entry : fs::directory_iterator(dir)) {
+        if (entry.is_regular_file() &&
+            entry.path().filename().string().rfind(prefix, 0) == 0) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+static void writeFakeFile(const std::string& path, size_t bytes, int ageDays) {
+    namespace fs = std::filesystem;
+    std::ofstream out(path);
+    out << std::string(bytes, 'x');
+    out.close();
+    if (ageDays > 0) {
+        std::error_code ec;
+        fs::last_write_time(path, fs::file_time_type::clock::now() -
+                                      std::chrono::hours(24LL * ageDays),
+                            ec);
+    }
+}
+
 void test_spdlog_base_use(){
     svk::log::init("svk_test_base_use");
 
@@ -144,6 +170,82 @@ void test_log_audit_channel(){
     std::printf("--- 审计通道：主/审计文件分离校验完成 ---\n");
 }
 
+void test_log_rotation_prune(){
+    namespace fs = std::filesystem;
+
+    // 轮转：单文件 1KB 上限，写约 4KB 应切出 name.N.log。
+    {
+        const std::string dir =
+            (fs::temp_directory_path() / "svk_test_rotation").string();
+        fs::remove_all(dir);
+        fs::create_directories(dir);
+        svk::log::init("svk_test_rotation");
+        svk::log::LogFileConfig config;
+        config.directory = dir;
+        config.filePrefix = "test-rot";
+        config.async = false;
+        config.maxFileSizeBytes = 1024;
+        config.maxRotatedFiles = 8;
+        CHECK_TRUE(svk::log::initWithFile(spdlog::get("svk_test_rotation"),
+                                          config));
+        for (int i = 0; i < 100; ++i) {
+            SVK_LOGI("practice", "rotation_line seq={} payload=xxxxxxxxxxxx", i);
+        }
+        svk::log::flush();
+        svk::log::shutdown();
+        CHECK_TRUE(countFilesWithPrefix(dir, "test-rot") >= 2);
+        fs::remove_all(dir);
+    }
+
+    // 过期清理：10 天前的旧文件在 maxFileAgeDays=7 下应被删除。
+    {
+        const std::string dir =
+            (fs::temp_directory_path() / "svk_test_prune_age").string();
+        fs::remove_all(dir);
+        fs::create_directories(dir);
+        const std::string oldFile = dir + "/test-age-20200101-000000-000.log";
+        writeFakeFile(oldFile, 128, 10);
+        svk::log::init("svk_test_prune_age");
+        svk::log::LogFileConfig config;
+        config.directory = dir;
+        config.filePrefix = "test-age";
+        config.maxFileAgeDays = 7;
+        CHECK_TRUE(svk::log::initWithFile(spdlog::get("svk_test_prune_age"),
+                                          config));
+        svk::log::shutdown();
+        CHECK_TRUE(!fs::exists(oldFile));
+        fs::remove_all(dir);
+    }
+
+    // 总量清理：3 个 3KB 文件、上限 5KB，最老的两个应被删除。
+    {
+        const std::string dir =
+            (fs::temp_directory_path() / "svk_test_prune_total").string();
+        fs::remove_all(dir);
+        fs::create_directories(dir);
+        writeFakeFile(dir + "/test-cap-20240101-000000-000.log", 3072, 3);
+        writeFakeFile(dir + "/test-cap-20240102-000000-000.log", 3072, 2);
+        writeFakeFile(dir + "/test-cap-20240103-000000-000.log", 3072, 1);
+        svk::log::init("svk_test_prune_total");
+        svk::log::LogFileConfig config;
+        config.directory = dir;
+        config.filePrefix = "test-cap";
+        config.maxFileAgeDays = 0;  // 关闭按时间删除，只看总量
+        config.maxTotalBytes = 5 * 1024;
+        CHECK_TRUE(svk::log::initWithFile(spdlog::get("svk_test_prune_total"),
+                                          config));
+        svk::log::shutdown();
+        CHECK_TRUE(
+            !fs::exists(dir + "/test-cap-20240101-000000-000.log"));
+        CHECK_TRUE(
+            !fs::exists(dir + "/test-cap-20240102-000000-000.log"));
+        CHECK_TRUE(
+            fs::exists(dir + "/test-cap-20240103-000000-000.log"));
+        fs::remove_all(dir);
+    }
+    std::printf("--- 轮转与清理：rotation / 过期 / 总量校验完成 ---\n");
+}
+
 int main() {
 
     // 学习 spdlog 的基本用法，输出到终端，并统计耗时。
@@ -154,6 +256,9 @@ int main() {
 
     // 审计通道：独立文件、与主文件内容隔离。
     test_log_audit_channel();
+
+    // 轮转与清理：单文件上限切分、过期删除、总量上限。
+    test_log_rotation_prune();
 
     if (g_failures > 0) {
         std::printf("\n%d 项 CHECK 失败\n", g_failures);
