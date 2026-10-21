@@ -20,8 +20,8 @@
 #include <unistd.h>
 #endif
 
-#include "log.h"
-#include "trace.h"
+#include "log/log.h"
+#include "log/trace.h"
 
 static int g_failures = 0;
 

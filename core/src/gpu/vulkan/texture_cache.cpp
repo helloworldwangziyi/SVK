@@ -2,12 +2,12 @@
  * @file texture_cache.cpp
  * @brief 纹理 GPU 设施实现：采样器 + descriptor + 1x1 白纹理。
  */
-#include "gpu/texture_cache.h"
+#include "gpu/vulkan/texture_cache.h"
 
 // VulkanContext：设备句柄与显存类型查找。
-#include "gpu/vulkan_context.h"
+#include "gpu/vulkan/vulkan_context.h"
 // SVK_LOGE 日志宏：spdlog 封装，全局统一的日志入口。
-#include "log.h"
+#include "log/log.h"
 
 // std::memset：白纹理像素写入。
 #include <cstring>

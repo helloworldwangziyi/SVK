@@ -55,7 +55,7 @@
 #define SVK_RECORDER_HAS_MMAP 1
 #endif
 
-#include "log.h"
+#include "log/log.h"
 
 namespace svk {
 namespace recorder {

@@ -2,14 +2,14 @@
  * @file ui_pipeline.cpp
  * @brief UI 图形管线实现：pipeline layout + graphics pipeline 的创建。
  */
-#include "gpu/ui_pipeline.h"
+#include "gpu/vulkan/ui_pipeline.h"
 
 // VulkanContext：设备句柄与 shader module 创建。
-#include "gpu/vulkan_context.h"
+#include "gpu/vulkan/vulkan_context.h"
 // 预编译 SPIR-V 字节码（编译期内嵌进二进制，免运行时读文件）。
 #include "assets/ui_shaders.h"
 // SVK_LOGE 日志宏：spdlog 封装，全局统一的日志入口。
-#include "log.h"
+#include "log/log.h"
 // ui::UiVertex：顶点输入布局的 stride 来源。
 #include "ui/canvas.h"
 

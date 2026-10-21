@@ -6,11 +6,6 @@ local.properties
 *.apk
 .DS_Store
 
-# MoltenVK 二进制产物：由 third_party/moltenvk/fetch.sh 再下载，不入库
-third_party/moltenvk/.download/
-third_party/moltenvk/MoltenVK.xcframework/
-third_party/moltenvk/include/
-
 # Xcode 用户态文件（共享 scheme 保留入库）
 xcuserdata/
 DerivedData/

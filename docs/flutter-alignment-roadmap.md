@@ -1,4 +1,4 @@
-# 向 Flutter 引擎架构靠拢路线图（C++17 + Vulkan，无 Dart）
+# 向 Flutter 引擎架构靠拢路线图（C++17 多后端 Vulkan + Metal，无 Dart）
 
 状态：**待评审**。评审通过后按阶段拆解执行，每阶段单独交付、单独验收。
 
@@ -6,18 +6,19 @@
 
 `third_party/flutter-engine/` 是上游 Flutter engine 仓库 `src/flutter/` 的裸拷贝（约 70MB，BSD 协议，无 git/版本锁定，2026-10-19 入库，提交 `8db2ba1`）。其中 Dart 强耦合部分（`lib/ui/`、`runtime/`、tonic）不用；C++ 部分（`impeller/`、`flow/`、`display_list/`、`fml/`、`shell/`、`txt/`）完整可读。
 
-**目标**：保持 `svk_core` 的 C++17 + Vulkan 技术栈与三端壳结构不变，在架构上全量对齐 Flutter 引擎的渲染管线分层，最终形态为"Flutter 引擎的 C++ 骨架"：
+**目标**：保持 `svk_core` 的 C++17 多后端（Vulkan + Metal）技术栈与三端壳结构不变，在架构上全量对齐 Flutter 引擎的渲染管线分层，最终形态为"Flutter 引擎的 C++ 骨架"：
 
 ```text
-Widget 树（C++）→ Layer 树 → DisplayList → Vulkan 渲染核 → 平台壳
+Widget 树（C++）→ Layer 树 → DisplayList → 多后端渲染核（Vulkan + Metal）→ 平台壳
 ```
 
 **非目标**（明确不做）：
 
 - 不引入 Dart VM / Dart 绑定层。
 - 不整体移植 Impeller 或 flow 的源码（体量大、GN 构建、依赖深）；做法是**读源码、抄架构、用本项目代码风格重写精简版**。
-- 不引入 Skia；渲染继续走自有 Vulkan 管线。
+- 不引入 Skia；渲染继续走自有的 Vulkan/Metal 管线。
 - 不切换构建系统，继续 CMake + 三端原生工程。
+- 不维护 iOS 的 MoltenVK 转译路径（已删除）；iOS 走原生 Metal 后端。
 
 ## 2. 现状与差距
 
@@ -28,7 +29,7 @@ Widget 树（C++）→ Layer 树 → DisplayList → Vulkan 渲染核 → 平台
 | `IPlatform`（render_platform.h） | embedder surface delegate | ✅ 雏形已在 |
 | `IRasterSurface`（raster_surface.h） | `shell/gpu/gpu_surface_vulkan*` | ✅ 雏形已在 |
 | 三端 bridge（platform/*/） | `shell/platform/{android,darwin,embedder}/` | ✅ 同构 |
-| Vulkan 设施（gpu/、vulkan_renderer） | `impeller/renderer/backend/vulkan/` | ⚠️ 最小可用，生产级能力缺 |
+| 双后端 RHI（`gpu/vulkan` + `gpu/metal`、`renderer` 编排层） | `impeller/renderer/backend/{vulkan,metal}/` | ✅ P0 已完成，生产级能力持续加固 |
 | spdlog 日志封装 | — | ✅ 超预期完整 |
 
 空白层（当前完全不存在，即本路线图的主体）：
@@ -50,7 +51,9 @@ samples/<app>/            App 业务（不变）
 core/src/ui/              Widget/RenderObject 树（新建，P3）
 core/src/compositor/      Layer 树 + Preroll/Paint（新建，P2）
 core/src/dl/              DisplayList 指令流（新建，P1）
-core/src/gpu/             Vulkan 渲染核（现有，持续加固）
+core/src/gpu/             RHI 与后端（现有：rhi.h、backend_factory.cpp、
+                          vulkan/、metal/，持续加固）
+core/src/renderer.*       渲染编排层（P0 已完成）
 core/src/frame/           帧调度器 / 动画 / 输入分发（新建，P4/P5）
 platform/{android,ios,hongmeng}/  平台壳（不变，按需补事件注入）
 ```
@@ -59,11 +62,17 @@ platform/{android,ios,hongmeng}/  平台壳（不变，按需补事件注入）
 
 ## 4. 分阶段计划
 
+### P0：RHI 拆分与 Metal 后端（已完成）
+
+- **交付**：渲染拆为编排层（`core/src/renderer.*`，实现 `IRasterSurface`，只做生命周期编排、帧重试语义与日志）与后端接口 `gpu::IGpuBackend`（`core/src/gpu/rhi.h`）；Vulkan 设施平移到 `gpu/vulkan/`（帧执行由 `vulkan_backend` 承接），新增 iOS 原生 Metal 后端 `gpu/metal/`（内嵌 MSL 运行时编译）。装配点在 `gpu/backend_factory.cpp`：iOS 定义 `SVK_METAL_BACKEND` 走 Metal，Android/鸿蒙/host 走 Vulkan。
+- **配套**：`IPlatform` 收缩为 `nativeWindowHandle()` + `getSurfaceSize()`；surface 创建收进 core（Vulkan 按平台宏分发，Metal 直接消费 `CAMetalLayer`）；`third_party/moltenvk/` 与 iOS 工程的 glslc 内嵌 build phase 移除。
+- **验收**：三端帧语义一致（双帧在飞、16ms 超时 Retry、清屏色、顶点色 × 纹理）；Android/鸿蒙行为不变，iOS 改走原生 Metal。
+
 ### P1：Display List 指令流
 
 - **目标**：`ui::Canvas` 从立即模式改为录制式指令流；渲染端回放翻译为 GPU 顶点流。补齐图元：圆角矩形、真实纹理/图片（替换 1×1 白纹理占位）、path（可先只支持凸多边形三角化）。
 - **对照阅读**：`display_list/dl_builder.h`、`dl_canvas.h`、`dl_op_records.h`（op 划分与权重估算）。
-- **落地**：`core/src/dl/`（`display_list.h/.cpp`、`ops.h`、`dl_canvas.h`）；`vulkan_renderer` 的输入从 `ui::Canvas` 换成 `DisplayList`。
+- **落地**：`core/src/dl/`（`display_list.h/.cpp`、`ops.h`、`dl_canvas.h`）；渲染后端（`gpu/vulkan/vulkan_backend` 与 `gpu/metal/metal_backend`）的输入从 `ui::Canvas` 换成 `DisplayList`。
 - **验收**：samples/triangle 改用指令流后渲染结果不变；host 测试断言录制的 op 序列与回放输出。
 
 ### P2：Layer 树合成器
@@ -127,7 +136,7 @@ platform/{android,ios,hongmeng}/  平台壳（不变，按需补事件注入）
 - [ ] **参考版本漂移**：flutter-engine 拷贝无版本锁定，后续如需对照升级困难。是否固定记录一个上游 commit 作为参考基线？
 - [ ] **P3 的设计自由度**：Flutter framework 是 Dart 的，C++ 版三树分离没有可直接对照的源码，接口设计需先出小型 RFC（可附在本文件后追加章节）。
 - [ ] **文字路线**：P6 依赖第三方库栈，与"轻依赖"传统冲突，届时单独决策。
-- [ ] **MoltenVK 差异**：iOS 经 MoltenVK 跑 Vulkan，Impeller 的 vulkan 做法（如 descriptor 管理）在 MoltenVK 上有差异，P1/P2 涉及渲染改动时需真机回归。
+- [x] **MoltenVK 差异（已决）**：iOS 不再经 MoltenVK 转译，已切换原生 Metal 后端（`core/src/gpu/metal/`），MoltenVK 路径随 `third_party/moltenvk/` 一并移除；P1/P2 涉及渲染改动时仍需三端真机回归。
 - [ ] **人力节奏**：每阶段体量差距大（P1 小、P3/P6 大），评审时确认是否按单人节奏排期。
 
 ## 附录：参考源码索引

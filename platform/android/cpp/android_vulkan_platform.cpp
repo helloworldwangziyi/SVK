@@ -4,7 +4,7 @@
 #include <android/native_window_jni.h>
 #include <jni.h>
 
-#include "log.h"
+#include "log/log.h"
 
 namespace svk {
 
@@ -40,31 +40,8 @@ public:
         }
     }
 
-    const char* getSurfaceExtensionName() const override {
-        return VK_KHR_ANDROID_SURFACE_EXTENSION_NAME;
-    }
-
-    bool createVulkanSurface(VkInstance instance, VkSurfaceKHR* surface) override {
-        if (!surface_) {
-            SVK_LOGE("android", "surface_create_failed reason=surface_null");
-            return false;
-        }
-
-        if (!window_) {
-            SVK_LOGE("android", "surface_create_failed reason=native_window_failed");
-            return false;
-        }
-
-        VkAndroidSurfaceCreateInfoKHR createInfo{};
-        createInfo.sType = VK_STRUCTURE_TYPE_ANDROID_SURFACE_CREATE_INFO_KHR;
-        createInfo.window = window_;
-
-        if (vkCreateAndroidSurfaceKHR(instance, &createInfo, nullptr, surface) != VK_SUCCESS) {
-            SVK_LOGE("android", "surface_create_failed reason=vulkan_surface_failed");
-            return false;
-        }
-        return true;
-    }
+    // 后端（core 的 Vulkan 后端）经本句柄创建 VkSurfaceKHR；本类不再感知 Vulkan。
+    void* nativeWindowHandle() const override { return window_; }
 
     void getSurfaceSize(uint32_t* width, uint32_t* height) override {
         if (window_) {

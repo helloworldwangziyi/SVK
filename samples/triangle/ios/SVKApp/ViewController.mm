@@ -10,7 +10,7 @@
 // iOS 共享宿主壳：SVKMetalView（CAMetalLayer 宿主）+ CADisplayLink 帧驱动。
 //
 // 薄壳视图只负责三件事：
-//   1. backing layer 换成 CAMetalLayer（MoltenVK 的 surface 来源）；
+//   1. backing layer 换成 CAMetalLayer（Metal 后端的呈现目标）；
 //   2. 布局时同步 drawableSize（像素 = 点 × scale）并上报 resize；
 //   3. CADisplayLink（iOS 的 VSync 通道，对应 Android 的 Choreographer）
 //      每帧把时间戳交给 native 引擎。

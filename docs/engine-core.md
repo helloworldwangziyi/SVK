@@ -50,7 +50,7 @@
 | `core/src/gpu/metal/metal_backend_factory.h` | Metal 后端装配契约头（`createMetalBackend()`） |
 | `core/src/gpu/metal/metal_shaders.h` | 内嵌 MSL 着色器源字符串，运行时编译 |
 | `core/src/ui/canvas.h/.cpp` | CPU 侧顶点流和 Batch 收集，支持三角形、矩形 |
-| `core/src/log.h` | spdlog 初始化、统一消息前缀和 `SVK_LOG*` 宏 |
+| `core/src/log/log.h` | spdlog 初始化、统一消息前缀和 `SVK_LOG*` 宏 |
 | `shaders/ui_vertex.vert` | 像素坐标经 MVP 转到 NDC，传递颜色和 UV（Vulkan 后端） |
 | `shaders/ui_fragment.frag` | 输出 `顶点色 × 纹理采样`（Vulkan 后端） |
 | `CMakeLists.txt` | 定义 `svk_core`、依赖和 Shader 构建 |
@@ -368,7 +368,7 @@ Surface 恢复时：
 
 ### 10.1 公共 API
 
-`core/src/log.h` 提供：
+`core/src/log/log.h` 提供：
 
 - `svk::log::init(tag)`：创建或复用 stdout logger。
 - `svk::log::init(logger)`：注入平台构造的终端 logger。
@@ -387,7 +387,7 @@ Surface 恢复时：
   就地掩码，全通道生效；`setSensitiveKeys()` 覆盖清单、`setMaskingEnabled()`
   开关。
 - 落盘加密：`LogFileConfig::fileEncryptionKeyHex`（64 位十六进制 ChaCha20 密钥）
-  开启后主/审计文件 sink 换为加密 sink（`log_crypto.h`，混淆级防明文检索，
+  开启后主/审计文件 sink 换为加密 sink（`log/log_crypto.h`，混淆级防明文检索，
   不做轮转）；`decryptFileToFile()` 供工具侧还原。
 - 日志归集：`collectLogFiles()` 按修改时间窗复制日志到目标目录并写
   manifest.txt（session、文件清单）；压缩与上传由平台/业务层完成。

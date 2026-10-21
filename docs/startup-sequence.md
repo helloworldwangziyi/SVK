@@ -34,10 +34,10 @@ flowchart TB
         C4["gpu 子模块<br/>VulkanContext / Swapchain / UiPipeline / TextureCache"]
     end
 
-    subgraph platformImpl["IPlatform 实现（surface 创建 + 尺寸查询）"]
-        P1["AndroidPlatform<br/>vkCreateAndroidSurfaceKHR"]
-        P2["IosPlatform<br/>vkCreateMetalSurfaceEXT（MoltenVK）"]
-        P3["HongmengPlatform<br/>vkCreateSurfaceOHOS"]
+    subgraph platformImpl["IPlatform 实现（原生窗口句柄 + 尺寸查询）"]
+        P1["AndroidPlatform<br/>ANativeWindow*"]
+        P2["IosPlatform<br/>CAMetalLayer*"]
+        P3["HongmengPlatform<br/>OHNativeWindow*"]
     end
 
     A1 --> B1
@@ -122,7 +122,7 @@ sequenceDiagram
     View->>CBridge: svkIosResize(w, h)
     Sys-->>VC: viewDidAppear
     VC->>CBridge: svkIosInit(CAMetalLayer)
-    Note over CBridge,Core: 走共享主干（3.4），surface 由<br/>vkCreateMetalSurfaceEXT 经 MoltenVK 创建
+    Note over CBridge,Core: 走共享主干（3.4），Metal 后端直接<br/>消费 CAMetalLayer（nextDrawable 获取呈现目标）
     Sys-->>VC: onDisplayLink（每个 VSync）
     Note over VC: 取 steady_clock 单调秒数，与另两端语义一致
 ```
@@ -153,7 +153,7 @@ sequenceDiagram
     Shell->>Sys: displaySync.create().on('frame').start()
     Sys-->>NAPI: OnSurfaceCreatedCB(component, window)
     NAPI->>NAPI: OH_NativeXComponent_GetXComponentSize
-    Note over NAPI,Core: 走共享主干（3.4），surface 由<br/>vkCreateSurfaceOHOS 创建
+    Note over NAPI,Core: 走共享主干（3.4），Vulkan 后端在 core 内经<br/>vkCreateSurfaceOHOS 创建 surface
     Sys-->>Shell: 每个 VSync：'frame' 回调
     Shell->>NAPI: beginFrame(intervalInfo.timestamp)
 ```
@@ -308,8 +308,8 @@ EntryAbility.onDestroy → `nativeShutdown` / `svkIosShutdown` / `onShutdown`，
 | 环节 | 文件 |
 |---|---|
 | 公共接口 | `core/src/app.h`、`core/src/render_platform.h`、`core/src/raster_surface.h` |
-| 引擎 | `core/src/vulkan_renderer.*`、`core/src/gpu/*`、`core/src/ui/canvas.*` |
+| 引擎 | `core/src/renderer.*`、`core/src/gpu/rhi.h`、`core/src/gpu/backend_factory.cpp`、`core/src/gpu/vulkan/*`、`core/src/gpu/metal/*`、`core/src/ui/canvas.*` |
 | Android | `platform/android/java/.../VulkanSurfaceView.java`、`NativeBridge.java`、`platform/android/cpp/android_jni_bridge.cpp`、`android_vulkan_platform.cpp` |
-| iOS | `samples/triangle/ios/SVKApp/ViewController.mm`、`platform/ios/ios_shell_bridge.mm`、`ios_vulkan_platform.mm` |
+| iOS | `samples/triangle/ios/SVKApp/ViewController.mm`、`platform/ios/ios_shell_bridge.mm`、`ios_platform.mm` |
 | 鸿蒙 | `samples/triangle/hongmeng/entry/src/main/ets/vulkan/VulkanShell.ets`、`entryability/EntryAbility.ets`、`platform/hongmeng/cpp/hongmeng_napi_bridge.cpp`、`hongmeng_vulkan_platform.cpp` |
 | App 示例 | `samples/triangle/app.cpp`、`samples/triangle/triangle.h` |

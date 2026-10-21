@@ -1,9 +1,8 @@
 // ============================================================================
-// 鸿蒙平台适配：XComponent 的 OHNativeWindow → Vulkan surface（VK_OHOS_surface）。
+// 鸿蒙平台适配：持有 XComponent 下发的 OHNativeWindow 句柄与创建时刻尺寸。
 //
 // 与 Android 壳（android_vulkan_platform.cpp）的对应关系：
 //   ANativeWindow（Java Surface 解包）→ OHNativeWindow（XComponent 独立 surface）
-//   vkCreateAndroidSurfaceKHR        → vkCreateSurfaceOHOS
 //
 // 两处值得注意的差别：
 //   - 窗口句柄所有权：Android 由 ANativeWindow_fromSurface 取得、析构时 release；
@@ -16,16 +15,18 @@
 //     因此尺寸随构造传入并缓存；之后的尺寸变化由 NAPI 桥通知 Renderer，
 //     不经过本类。
 //
-// VK_USE_PLATFORM_OHOS 由构建系统定义
-// （见 samples/<app>/hongmeng/entry/src/main/cpp/CMakeLists.txt），
-// 定义后 vulkan.h 才会包含 vulkan_ohos.h，暴露 vkCreateSurfaceOHOS 等声明。
+// Vulkan surface 的创建已收进 core 的 Vulkan 后端
+// （VK_USE_PLATFORM_OHOS，见 samples/<app>/hongmeng/entry/src/main/cpp/CMakeLists.txt）；
+// 本类只暴露不透明原生窗口句柄，不感知 Vulkan。
 // ============================================================================
 
 #include "render_platform.h"
 
 #include <cstdint>
 
-#include "log.h"
+#include <native_window/external_window.h>
+
+#include "log/log.h"
 
 namespace svk {
 
@@ -34,24 +35,8 @@ public:
     HongmengPlatform(OHNativeWindow* window, uint32_t width, uint32_t height)
         : window_(window), width_(width), height_(height) {}
 
-    const char* getSurfaceExtensionName() const override {
-        return VK_OHOS_SURFACE_EXTENSION_NAME;
-    }
-
-    bool createVulkanSurface(VkInstance instance, VkSurfaceKHR* surface) override {
-        if (!window_) {
-            SVK_LOGE("harmony", "surface_create_failed reason=native_window_null");
-            return false;
-        }
-        VkSurfaceCreateInfoOHOS createInfo{};
-        createInfo.sType = VK_STRUCTURE_TYPE_SURFACE_CREATE_INFO_OHOS;
-        createInfo.window = window_;
-        if (vkCreateSurfaceOHOS(instance, &createInfo, nullptr, surface) != VK_SUCCESS) {
-            SVK_LOGE("harmony", "surface_create_failed reason=vulkan_surface_failed");
-            return false;
-        }
-        return true;
-    }
+    // 后端（core 的 Vulkan 后端）经本句柄创建 VkSurfaceKHR；本类不再感知 Vulkan。
+    void* nativeWindowHandle() const override { return window_; }
 
     void getSurfaceSize(uint32_t* width, uint32_t* height) override {
         *width = width_;

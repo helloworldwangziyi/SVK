@@ -1,19 +1,20 @@
 /**
- * @file vulkan_renderer.cpp
- * @brief 极简自包含 Vulkan 渲染器实现：渲染 ui::Canvas 收集的 2D UI 几何。
+ * @file vulkan_backend.cpp
+ * @brief Vulkan 渲染后端实现：帧执行设施（命令池/顶点缓冲/同步原语）与
+ *        acquire → 录制 → 提交 → present 的 renderFrame 主流程。
  *
- * GPU 设施分属 gpu/ 子模块（VulkanContext / Swapchain / UiPipeline /
- * TextureCache）；本文件只保留帧编排与执行设施：命令池、动态顶点缓冲、
- * 同步原语，以及 acquire → 录制 → 提交 → present 的 render 主流程。
+ * GPU 设施分属同目录子模块（VulkanContext / Swapchain / UiPipeline /
+ * TextureCache）；本文件只保留帧执行原语与一帧的完整执行，重试语义与
+ * 日志消息沿用旧 vulkan_renderer.cpp。
  */
-// Renderer 主头文件：声明本文件要实现的所有方法与句柄成员。
-#include "vulkan_renderer.h"
+// 后端主头文件：声明本文件要实现的所有方法与句柄成员
+// （GLM_FORCE_DEPTH_ZERO_TO_ONE 已在 vulkan_backend.h 顶部统一定义）。
+#include "gpu/vulkan/vulkan_backend.h"
 // SVK_LOGI/W/E 日志宏：spdlog 封装，全局统一的日志入口。
-#include "log.h"
+#include "log/log.h"
 
 // std::max / std::min：裁剪矩形的边界 clamp 要用。
 #include <algorithm>
-#include <chrono>
 // std::memcpy：把顶点数据拷进映射内存。
 #include <cstring>
 #include <limits>
@@ -21,33 +22,29 @@
 #include <vector>
 
 // glm 核心类型（mat4 等）与 glm::ortho：投影矩阵构建。
-// （GLM_FORCE_DEPTH_ZERO_TO_ONE 已在 vulkan_renderer.h 顶部统一定义。）
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
-namespace svk {
+namespace svk::gpu {
 
-std::unique_ptr<IRasterSurface> createRasterSurface(IPlatform* platform) {
-    return std::make_unique<Renderer>(platform);
-}
-
-/// 单次 render() 内"重建交换链 → 重画"的最大重试次数（见 render() 注释）。
+/// 单次 renderFrame() 内"重建交换链 → 重画"的最大重试次数（见 renderFrame 注释）。
 constexpr uint32_t kMaxFrameAttempts = 3;
 
-Renderer::Renderer(IPlatform* platform)
+VulkanBackend::VulkanBackend(IPlatform* platform)
     : context_(platform), textureCache_(context_), swapchain_(context_),
       uiPipeline_(context_) {}
 
-Renderer::~Renderer() {
-    // 析构兜底调 shutdown()；内部对空句柄有判断，重复调用也安全。
-    shutdown();
+VulkanBackend::~VulkanBackend() {
+    // 析构兜底调 shutdownDevice()；内部对空句柄有判断，重复调用也安全。
+    shutdownDevice();
 }
 
-bool Renderer::initialize() {
-    // 按依赖顺序搭建 Vulkan 栈。每一步都依赖前一步，所以任何一环失败都会立刻停止启动。
-    const auto startedAt = std::chrono::steady_clock::now();
-    SVK_LOGI("renderer", "initialize_start");
+bool VulkanBackend::initializeDevice() {
+    // 按依赖顺序搭建设备级 Vulkan 栈（与 surface 视觉尺寸无关，挂起/恢复期间保留）。
+    // 每一步都依赖前一步，所以任何一环失败都会立刻停止启动。
     // ① 地基：instance / surface / 物理与逻辑设备（gpu::VulkanContext）。
+    //    surface 在设备选取前创建：pickPhysicalDevice / createLogicalDevice 都要
+    //    查询 surface 的 present 支持，这是 Vulkan 的标准顺序。
     SVK_LOGI("renderer", "initialize_stage_start stage=vulkan_context");
     if (!context_.initialize()) return false;
     SVK_LOGI("renderer", "initialize_stage_done stage=vulkan_context");
@@ -55,19 +52,6 @@ bool Renderer::initialize() {
     SVK_LOGI("renderer", "initialize_stage_start stage=texture_cache");
     if (!textureCache_.initialize()) return false;
     SVK_LOGI("renderer", "initialize_stage_done stage=texture_cache");
-    // ③ 交换链及其下游：imageView / MSAA 颜色图 / renderPass 全部依赖 swapchain 的
-    // 格式与尺寸，窗口尺寸变化时这一段连同管线整体重建（见 recreateSwapchain）。
-    SVK_LOGI("renderer", "initialize_stage_start stage=swapchain");
-    if (!swapchain_.create()) return false;
-    SVK_LOGI("renderer", "initialize_stage_done stage=swapchain");
-    SVK_LOGI("renderer", "initialize_stage_start stage=ui_pipeline");
-    if (!uiPipeline_.create(swapchain_.renderPass(), swapchain_.extent(),
-                            swapchain_.msaaSamples(),
-                            textureCache_.descriptorSetLayout())) return false;
-    SVK_LOGI("renderer", "initialize_stage_done stage=ui_pipeline");
-    SVK_LOGI("renderer", "initialize_stage_start stage=framebuffers");
-    if (!swapchain_.createFramebuffers()) return false;
-    SVK_LOGI("renderer", "initialize_stage_done stage=framebuffers");
     // ④ 执行设施：命令池、顶点缓冲、命令缓冲、同步原语，与 swapchain 尺寸无关。
     SVK_LOGI("renderer", "initialize_stage_start stage=command_pool");
     if (!createCommandPool()) return false;
@@ -81,15 +65,40 @@ bool Renderer::initialize() {
     SVK_LOGI("renderer", "initialize_stage_start stage=sync_objects");
     if (!createSyncObjects()) return false;
     SVK_LOGI("renderer", "initialize_stage_done stage=sync_objects");
-    swapchain_.takeRebuildRequest(); // 初始尺寸已用于建链，不必在首帧重复重建。
-    const auto durationMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                std::chrono::steady_clock::now() - startedAt)
-                                .count();
-    SVK_LOGI("renderer", "initialize_complete duration_ms={}", durationMs);
     return true;
 }
 
-void Renderer::shutdown() {
+bool VulkanBackend::createSurface() {
+    // surface 与交换资源俱在视为已就绪（幂等）：冷启动时 ① 已为设备选取建过
+    // surface，但 swapchain/管线/帧缓冲（③ 段）还没走，不能只凭 surface 判就绪。
+    if (context_.surface() != VK_NULL_HANDLE &&
+        swapchain_.handle() != VK_NULL_HANDLE) {
+        return true;
+    }
+    // 重建顺序固定：surface → swapchain → 管线 → 帧缓冲（同旧 resumeSurface ③ 段）。
+    if (!context_.recreateSurface()) return false;
+    if (!swapchain_.create()) return false;
+    SVK_LOGI("renderer", "initialize_stage_done stage=swapchain");
+    if (!uiPipeline_.create(swapchain_.renderPass(), swapchain_.extent(),
+                            swapchain_.msaaSamples(),
+                            textureCache_.descriptorSetLayout())) return false;
+    SVK_LOGI("renderer", "initialize_stage_done stage=ui_pipeline");
+    if (!swapchain_.createFramebuffers()) return false;
+    SVK_LOGI("renderer", "initialize_stage_done stage=framebuffers");
+    // 新 surface 的尺寸已直接用于建链，不必在首帧重复重建。
+    swapchain_.takeRebuildRequest();
+    return true;
+}
+
+void VulkanBackend::destroySurface() {
+    // 与 recreateSwapchain 同序销毁"依赖 swapchain 的一段"，再销毁 surface 本体。
+    // 句柄级判空在各自模块内，重复调用安全（Renderer 层已先 waitIdle）。
+    uiPipeline_.destroy();
+    swapchain_.cleanup();
+    context_.destroySurface();
+}
+
+void VulkanBackend::shutdownDevice() {
     // 按相反顺序释放资源。设备必须先空闲，才能销毁任何仍在飞行中的对象。
     // 初始化可能中途失败退出，device 仍是空句柄，先判一下。
     const VkDevice device = context_.device();
@@ -128,7 +137,20 @@ void Renderer::shutdown() {
     commandBuffers_.clear();
 }
 
-bool Renderer::createCommandPool() {
+void VulkanBackend::setPlatform(IPlatform* platform) {
+    context_.setPlatform(platform);
+}
+
+void VulkanBackend::setTargetSize(uint32_t width, uint32_t height) {
+    swapchain_.setSize(width, height);
+}
+
+void VulkanBackend::waitIdle() {
+    const VkDevice device = context_.device();
+    if (device != VK_NULL_HANDLE) vkDeviceWaitIdle(device);
+}
+
+bool VulkanBackend::createCommandPool() {
     const VkDevice device = context_.device();
 
     // command pool 允许命令缓冲每帧重置并重新录制。
@@ -167,11 +189,11 @@ bool Renderer::createCommandPool() {
     return true;
 }
 
-bool Renderer::createVertexBuffers() {
-    vertexBuffers_.assign(gpu::kMaxFramesInFlight, VK_NULL_HANDLE);
-    vertexBufferMemorys_.assign(gpu::kMaxFramesInFlight, VK_NULL_HANDLE);
-    vertexBufferCapacities_.assign(gpu::kMaxFramesInFlight, 0);
-    for (uint32_t frameSlot = 0; frameSlot < gpu::kMaxFramesInFlight; ++frameSlot) {
+bool VulkanBackend::createVertexBuffers() {
+    vertexBuffers_.assign(kMaxFramesInFlight, VK_NULL_HANDLE);
+    vertexBufferMemorys_.assign(kMaxFramesInFlight, VK_NULL_HANDLE);
+    vertexBufferCapacities_.assign(kMaxFramesInFlight, 0);
+    for (uint32_t frameSlot = 0; frameSlot < kMaxFramesInFlight; ++frameSlot) {
         if (!createVertexBuffer(frameSlot, kInitialVertexCapacity)) {
             destroyVertexBuffers();
             return false;
@@ -183,7 +205,7 @@ bool Renderer::createVertexBuffers() {
     return true;
 }
 
-bool Renderer::createVertexBuffer(uint32_t frameSlot, uint32_t capacity) {
+bool VulkanBackend::createVertexBuffer(uint32_t frameSlot, uint32_t capacity) {
     const VkDevice device = context_.device();
 
     if (frameSlot >= vertexBuffers_.size() || capacity == 0) {
@@ -252,7 +274,7 @@ bool Renderer::createVertexBuffer(uint32_t frameSlot, uint32_t capacity) {
     return true;
 }
 
-void Renderer::destroyVertexBuffers() {
+void VulkanBackend::destroyVertexBuffers() {
     const VkDevice device = context_.device();
     for (VkBuffer buffer : vertexBuffers_) {
         if (buffer != VK_NULL_HANDLE) {
@@ -269,8 +291,8 @@ void Renderer::destroyVertexBuffers() {
     vertexBufferCapacities_.clear();
 }
 
-bool Renderer::uploadVertices(const ui::UiVertex* data, uint32_t count,
-                              uint32_t frameSlot) {
+bool VulkanBackend::uploadVertices(const ui::UiVertex* data, uint32_t count,
+                                   uint32_t frameSlot) {
     if (count == 0) {
         return true;
     }
@@ -305,10 +327,10 @@ bool Renderer::uploadVertices(const ui::UiVertex* data, uint32_t count,
     return true;
 }
 
-bool Renderer::createCommandBuffers() {
+bool VulkanBackend::createCommandBuffers() {
     // 每个 in-flight 帧配一个主命令缓冲，提交逻辑更简单。
     // kMaxFramesInFlight = 2：CPU 最多领先 GPU 两帧，每帧一条缓冲互不干扰。
-    commandBuffers_.resize(gpu::kMaxFramesInFlight);
+    commandBuffers_.resize(kMaxFramesInFlight);
 
     // 从命令池一次性批量分配。
     VkCommandBufferAllocateInfo allocInfo{};
@@ -328,28 +350,28 @@ bool Renderer::createCommandBuffers() {
     return true;
 }
 
-bool Renderer::createSyncObjects() {
+bool VulkanBackend::createSyncObjects() {
     const VkDevice device = context_.device();
 
     // 双缓冲能让 CPU 和 GPU 有一点重叠，但不会无限堆积帧。
     // 两类同步原语：semaphore 做 GPU 内部阶段间等待（acquire → 渲染 → 呈现），
     // fence 做 CPU 等 GPU；每帧各一套，互不打架。
-    imageAvailableSemaphores_.resize(gpu::kMaxFramesInFlight);
-    renderFinishedSemaphores_.resize(gpu::kMaxFramesInFlight);
-    inFlightFences_.resize(gpu::kMaxFramesInFlight);
+    imageAvailableSemaphores_.resize(kMaxFramesInFlight);
+    renderFinishedSemaphores_.resize(kMaxFramesInFlight);
+    inFlightFences_.resize(kMaxFramesInFlight);
 
     // semaphore 创建无需标志位，初始为未触发状态。
     VkSemaphoreCreateInfo semInfo{};
     semInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
 
-    // fence 建成 SIGNALED 初始态：第一帧 render() 的 vkWaitForFences 能立即通过，
+    // fence 建成 SIGNALED 初始态：第一帧 renderFrame() 的 vkWaitForFences 能立即通过，
     // 否则会永久等在一个从没人 signal 过的 fence 上。
     VkFenceCreateInfo fenceInfo{};
     fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
     fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
 
     // 逐帧创建两个 semaphore + 一个 fence。
-    for (uint32_t i = 0; i < gpu::kMaxFramesInFlight; ++i) {
+    for (uint32_t i = 0; i < kMaxFramesInFlight; ++i) {
         if (vkCreateSemaphore(device, &semInfo, nullptr,
                               &imageAvailableSemaphores_[i]) != VK_SUCCESS ||
             vkCreateSemaphore(device, &semInfo, nullptr,
@@ -361,18 +383,18 @@ bool Renderer::createSyncObjects() {
         }
     }
     SVK_LOGI("renderer", "sync_objects_created frames={} semaphores={} fences={}",
-             gpu::kMaxFramesInFlight,
+             kMaxFramesInFlight,
              imageAvailableSemaphores_.size() + renderFinishedSemaphores_.size(),
              inFlightFences_.size());
     return true;
 }
 
-bool Renderer::recreateSwapchain() {
+bool VulkanBackend::recreateSwapchain() {
     // 先等 GPU 空闲，释放依赖 swapchain 的状态，再从头重建。
     // 重建期间不能有任何帧在飞：先 vkDeviceWaitIdle 让 GPU 完全空闲。
     SVK_LOGI("renderer", "swapchain_recreate_start");
     vkDeviceWaitIdle(context_.device());
-    // 然后按 initialize() 里"依赖 swapchain 的那一段"原序重建；
+    // 然后按 initialize 的 ③ 段原序重建；
     // 命令池、顶点缓冲、同步对象与尺寸无关，不用动。
     // 管线跟随 swapchain 格式/尺寸/采样数，同批销毁重建。
     uiPipeline_.destroy();
@@ -388,46 +410,7 @@ bool Renderer::recreateSwapchain() {
     return true;
 }
 
-void Renderer::setSize(uint32_t width, uint32_t height) {
-    swapchain_.setSize(width, height);
-}
-
-bool Renderer::suspendSurface() {
-    // 已挂起（无 surface）视为成功，幂等。
-    if (context_.surface() == VK_NULL_HANDLE) return true;
-    SVK_LOGI("renderer", "surface_suspend_start");
-    const VkDevice device = context_.device();
-    if (device != VK_NULL_HANDLE) vkDeviceWaitIdle(device);
-    // 与 recreateSwapchain 同序销毁"依赖 swapchain 的一段"，再销毁 surface 本体。
-    uiPipeline_.destroy();
-    swapchain_.cleanup();
-    context_.destroySurface();
-    SVK_LOGI("renderer", "surface_suspended");
-    return true;
-}
-
-bool Renderer::resumeSurface(IPlatform* platform) {
-    // 已有 surface 说明未挂起，无需恢复（幂等）。
-    if (context_.surface() != VK_NULL_HANDLE) return true;
-    SVK_LOGI("renderer", "surface_resume_start");
-    // 重建顺序同 initialize 的 ③ 段：surface → swapchain → 管线 → 帧缓冲。
-    context_.setPlatform(platform);
-    if (!context_.recreateSurface()) return false;
-    SVK_LOGI("renderer", "surface_resume_stage_done stage=surface");
-    if (!swapchain_.create()) return false;
-    SVK_LOGI("renderer", "surface_resume_stage_done stage=swapchain");
-    if (!uiPipeline_.create(swapchain_.renderPass(), swapchain_.extent(),
-                            swapchain_.msaaSamples(),
-                            textureCache_.descriptorSetLayout())) return false;
-    SVK_LOGI("renderer", "surface_resume_stage_done stage=ui_pipeline");
-    if (!swapchain_.createFramebuffers()) return false;
-    // 新 surface 的尺寸已直接用于建链，不必在恢复后首帧重复重建。
-    swapchain_.takeRebuildRequest();
-    SVK_LOGI("renderer", "surface_resumed");
-    return true;
-}
-
-RenderResult Renderer::render(const ui::Canvas& canvas) {
+RenderResult VulkanBackend::renderFrame(const ui::Canvas& canvas) {
     // 尺寸变化（旋转等）时先重建 swapchain 再画帧：否则本帧会按旧 swapchain 尺寸
     // 投影、画进旧尺寸的图像，呈现出去的是变形/裁剪的画面；本渲染器是按需模型，
     // 之后没有新帧覆盖，错误会一直挂到下次事件。
@@ -436,7 +419,7 @@ RenderResult Renderer::render(const ui::Canvas& canvas) {
     // 重建查到的 surface 能力可能还是旧尺寸（滞后一拍），acquire/present 也会报
     // OUT_OF_DATE / SUBOPTIMAL。按需渲染没有"下一帧"来自我修正（持续渲染的引擎
     // 靠下一帧自然收敛），所以本帧内立刻重建重画，直到交换链与 surface 匹配。
-    bool extentMismatchWarned = false; // 尺寸不匹配告警每次 render 只打一条，避免刷屏
+    bool extentMismatchWarned = false; // 尺寸不匹配告警每次 renderFrame 只打一条，避免刷屏
     for (uint32_t attempt = 0; attempt < kMaxFrameAttempts; ++attempt) {
         if (swapchain_.takeRebuildRequest()) {
             if (!recreateSwapchain()) return RenderResult::Failed;
@@ -577,7 +560,7 @@ RenderResult Renderer::render(const ui::Canvas& canvas) {
         }
 
         // ⑦ 轮转帧槽位 0→1→0→1：下一帧换用另一套 semaphore / fence / 命令缓冲。
-        currentFrame_ = (currentFrame_ + 1) % gpu::kMaxFramesInFlight;
+        currentFrame_ = (currentFrame_ + 1) % kMaxFramesInFlight;
         return RenderResult::Rendered;
     }
 
@@ -588,8 +571,8 @@ RenderResult Renderer::render(const ui::Canvas& canvas) {
     return RenderResult::Retry;
 }
 
-void Renderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex,
-                                   const ui::Canvas& canvas) {
+void VulkanBackend::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex,
+                                        const ui::Canvas& canvas) {
     const VkExtent2D extent = swapchain_.extent();
     const VkSampleCountFlagBits msaaSamples = swapchain_.msaaSamples();
     const VkSurfaceTransformFlagBitsKHR surfaceTransform =
@@ -737,4 +720,4 @@ void Renderer::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex,
     vkEndCommandBuffer(cmd);
 }
 
-} // namespace svk
+} // namespace svk::gpu

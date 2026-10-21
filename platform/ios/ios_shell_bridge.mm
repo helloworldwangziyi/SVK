@@ -1,7 +1,7 @@
 // ============================================================================
 // iOS C 桥实现（最小形态）：UIKit 薄壳与 core 之间的翻译层。
 // 与 Android 的 android_jni_bridge.cpp 同构：
-//   CAMetalLayer → IosPlatform（vkCreateMetalSurfaceEXT，经 MoltenVK）
+//   CAMetalLayer → IosPlatform（原生 Metal 后端）
 //   CADisplayLink 帧回调 → IApp 构建本帧内容并提交 Renderer。
 //
 // 线程规则：本文件所有函数都在 iOS 主线程调用，core 的无锁单线程假设成立。
@@ -15,12 +15,12 @@
 #include "ios_shell_bridge.h"
 
 #include "app.h"
-#include "log.h"
+#include "log/log.h"
 #include "raster_surface.h"
 #include "render_platform.h"
 #include "ui/canvas.h"
 
-// ios_vulkan_platform.mm 以 C 链接导出的工厂函数（与 Android 同款约定）：
+// ios_platform.mm 以 C 链接导出的工厂函数（与 Android 同款约定）：
 // bridge 只需声明原型即可调用，无需知道 IosPlatform 类的布局。
 extern "C" svk::IPlatform* svkCreateIosPlatform(const void* layer);
 extern "C" void svkDestroyIosPlatform(svk::IPlatform* platform);
@@ -80,7 +80,7 @@ void svkIosInit(const void* layer) {
         if (resumed && g_renderer->resumeSurface(resumed)) {
             svkDestroyIosPlatform(g_platform);
             g_platform = resumed;
-            SVK_LOGI("ios", "engine_resumed renderer=vulkan");
+            SVK_LOGI("ios", "engine_resumed renderer=metal");
             return;
         }
         SVK_LOGE("ios", "engine_resume_failed action=cold_start");
@@ -116,7 +116,7 @@ void svkIosInit(const void* layer) {
 
     g_platform->getSurfaceSize(&g_width, &g_height);
     g_renderer->setSize(g_width, g_height);
-    SVK_LOGI("ios", "engine_started renderer=vulkan width={} height={}", g_width,
+    SVK_LOGI("ios", "engine_started renderer=metal width={} height={}", g_width,
              g_height);
 }
 
@@ -147,7 +147,7 @@ void svkIosSuspend(void) {
         svkDestroyIosPlatform(g_platform);
         g_platform = nullptr;
     }
-    SVK_LOGI("ios", "engine_suspended renderer=vulkan");
+    SVK_LOGI("ios", "engine_suspended renderer=metal");
     svk::log::flush();
 }
 
@@ -160,6 +160,6 @@ void svkIosShutdown(void) {
         g_platform = nullptr;
     }
     g_width = g_height = 0;
-    SVK_LOGI("ios", "engine_stopped renderer=vulkan");
+    SVK_LOGI("ios", "engine_stopped renderer=metal");
     svk::log::flush();
 }

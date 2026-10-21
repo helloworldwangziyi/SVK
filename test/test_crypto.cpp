@@ -14,8 +14,8 @@
 #include <sstream>
 #include <string>
 
-#include "log.h"
-#include "log_crypto.h"
+#include "log/log.h"
+#include "log/log_crypto.h"
 
 static int g_failures = 0;
 

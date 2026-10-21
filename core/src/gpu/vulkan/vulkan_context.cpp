@@ -2,10 +2,10 @@
  * @file vulkan_context.cpp
  * @brief Vulkan 地基实现：instance、surface、物理/逻辑设备与队列的创建。
  */
-#include "gpu/vulkan_context.h"
+#include "gpu/vulkan/vulkan_context.h"
 
 // SVK_LOGD/I/W/E 日志宏：spdlog 封装，全局统一的日志入口。
-#include "log.h"
+#include "log/log.h"
 
 // std::strcmp：比较扩展/校验层名字。
 #include <cstring>
@@ -149,15 +149,20 @@ bool VulkanContext::createInstance() {
     appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
     appInfo.apiVersion = VK_API_VERSION_1_0;
 
-    // 先放入通用 surface 扩展，再按平台和调试能力补充。
+    // 先放入通用 surface 扩展，再按编译目标补充平台 surface 扩展。
     // VK_KHR_surface 是平台无关的窗口表面抽象，任何上屏渲染都要它；
-    // 配套的平台 surface 扩展（每个窗口系统一个）由 IPlatform 提供。
+    // 平台 surface 扩展（每个窗口系统一个）按编译宏追加：
+    // Android NDK 在 __ANDROID__ 下自动定义 VK_USE_PLATFORM_ANDROID_KHR，
+    // 鸿蒙构建显式传 -DVK_USE_PLATFORM_OHOS；host 桌面构建（测试不调用
+    // initialize()）与 iOS（走 gpu/metal/）都不加。
     std::vector<const char*> extensions = {
         VK_KHR_SURFACE_EXTENSION_NAME,
-        platform_->getSurfaceExtensionName(),
     };
-    // 平台额外要求的实例扩展（MoltenVK：portability 枚举相关）。
-    platform_->getRequiredInstanceExtensions(extensions);
+#if defined(VK_USE_PLATFORM_ANDROID_KHR)
+    extensions.push_back(VK_KHR_ANDROID_SURFACE_EXTENSION_NAME);
+#elif defined(VK_USE_PLATFORM_OHOS)
+    extensions.push_back(VK_OHOS_SURFACE_EXTENSION_NAME);
+#endif
 
     // 枚举实例级扩展：仍是"先取数量、再取数据"的两次调用惯用法。
     uint32_t extCount = 0;
@@ -186,9 +191,8 @@ bool VulkanContext::createInstance() {
     // VkInstanceCreateInfo 总装：应用信息 + 要启用的扩展与校验层。
     VkInstanceCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
-    // 平台要求的实例创建标志（MoltenVK：VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR，
-    // 不加则枚举不到可移植性物理设备）。
-    createInfo.flags = platform_->getInstanceCreateFlags();
+    // flags 保持 0：原先 MoltenVK 要求的 VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR
+    // 已随 Metal 后端移出 Vulkan 路径。
     createInfo.pApplicationInfo = &appInfo;
     // 扩展与层都以"数量 + 字符串指针数组"的形式传入。
     createInfo.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
@@ -238,14 +242,38 @@ bool VulkanContext::createInstance() {
 }
 
 bool VulkanContext::createSurface() {
-    // surface 的创建交给平台抽象层处理。
-    // 具体怎么建 surface 只有平台知道：Android 包 ANativeWindow，
-    // 所以委托给 IPlatform，本文件不含任何平台 API。
+    // surface 由本模块按编译目标直接从原生窗口句柄创建（IPlatform 只给不透明
+    // void*，不感知任何图形 API）：Android 包 ANativeWindow，鸿蒙包 OHNativeWindow。
+    // vulkan_android.h / vulkan_ohos.h 已前向声明各自的窗口类型，无需额外 include。
     SVK_LOGI("vulkan", "surface_create_start");
-    if (!platform_->createVulkanSurface(instance_, &surface_)) {
+    void* handle = platform_ ? platform_->nativeWindowHandle() : nullptr;
+    if (handle == nullptr) {
+        SVK_LOGE("vulkan", "surface_create_failed reason=no_native_window");
+        return false;
+    }
+#if defined(VK_USE_PLATFORM_ANDROID_KHR)
+    VkAndroidSurfaceCreateInfoKHR surfaceInfo{};
+    surfaceInfo.sType = VK_STRUCTURE_TYPE_ANDROID_SURFACE_CREATE_INFO_KHR;
+    surfaceInfo.window = static_cast<ANativeWindow*>(handle);
+    if (vkCreateAndroidSurfaceKHR(instance_, &surfaceInfo, nullptr, &surface_) !=
+        VK_SUCCESS) {
         SVK_LOGE("vulkan", "surface_create_failed");
         return false;
     }
+#elif defined(VK_USE_PLATFORM_OHOS)
+    VkSurfaceCreateInfoOHOS surfaceInfo{};
+    surfaceInfo.sType = VK_STRUCTURE_TYPE_SURFACE_CREATE_INFO_OHOS;
+    surfaceInfo.window = static_cast<OHNativeWindow*>(handle);
+    if (vkCreateSurfaceOHOS(instance_, &surfaceInfo, nullptr, &surface_) !=
+        VK_SUCCESS) {
+        SVK_LOGE("vulkan", "surface_create_failed");
+        return false;
+    }
+#else
+    // host 桌面构建：测试不调用 initialize()；iOS 走 gpu/metal/。
+    SVK_LOGE("vulkan", "surface_create_failed reason=no_platform_backend");
+    return false;
+#endif
     return true;
 }
 
@@ -387,8 +415,6 @@ bool VulkanContext::createLogicalDevice() {
 
     // 设备级必须启用 VK_KHR_swapchain，否则后面创建交换链会被校验层拦下。
     std::vector<const char*> deviceExtensions = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
-    // 平台额外要求的设备扩展（MoltenVK：VK_KHR_portability_subset）。
-    platform_->getRequiredDeviceExtensions(deviceExtensions);
 
     // VkDeviceCreateInfo 总装：队列需求 + 特性 + 扩展。
     VkDeviceCreateInfo createInfo{};

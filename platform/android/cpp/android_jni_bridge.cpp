@@ -14,7 +14,7 @@
 #include <spdlog/sinks/android_sink.h>
 
 #include "app.h"
-#include "log.h"
+#include "log/log.h"
 #include "raster_surface.h"
 #include "render_platform.h"
 #include "ui/canvas.h"

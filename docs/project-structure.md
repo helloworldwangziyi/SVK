@@ -16,7 +16,7 @@ SVK/
 │  │  └─ java/                      # NativeBridge、VulkanSurfaceView
 │  ├─ ios/
 │  │  ├─ ios_shell_bridge.*         # iOS 系统桥接
-│  │  └─ ios_vulkan_platform.mm     # CAMetal + IosPlatform
+│  │  └─ ios_platform.mm            # 持有 CAMetalLayer*，供 Metal 后端
 │  └─ hongmeng/
 │     └─ cpp/                       # NAPI 与 Vulkan 平台适配
 │
@@ -56,7 +56,7 @@ SVK/
   （`get_filename_component(SVK_ROOT ...)`），再引用 `core/`、
   `platform/<平台>/cpp` 和 App 源文件。
 - iOS 工程以 `$(SRCROOT)/../../..` 推导仓库根目录，引用 `core/`、
-  `platform/ios/`、`third_party/moltenvk/` 和 App 源文件。
+  `platform/ios/` 和 App 源文件。
 - Android `app/build.gradle` 以 `../../../../platform/android/java`
   引用共享 Java 组件。
 
@@ -133,7 +133,7 @@ Java、Objective-C 或 ArkTS 中分别复制一套业务逻辑。
 # Android（需要 JDK 17+、Android SDK 与 NDK）
 cd samples/triangle/android && ./gradlew assembleDebug
 
-# iOS（需要 CMake、glslc，先执行 ./third_party/moltenvk/fetch.sh）
+# iOS（Metal 着色器以内嵌 MSL 源在运行时编译，构建无需额外工具）
 xcodebuild -project samples/triangle/ios/SVKApp.xcodeproj \
   -scheme SVKApp -configuration Debug \
   -sdk iphoneos -destination generic/platform=iOS \

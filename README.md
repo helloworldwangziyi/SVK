@@ -8,10 +8,10 @@ surface 与帧节奏，具体 App 业务全部由平台无关的 C++ 代码实�
 ```
 core/                              # C++ SDK：公共接口、绘制与渲染
 ├─ src/app.h                       # IApp：平台壳与 App 之间的通用接口
-├─ src/render_platform.h           # IPlatform：Vulkan surface 平台抽象
+├─ src/render_platform.h           # IPlatform：原生窗口句柄与尺寸的平台抽象
 ├─ src/raster_surface.h            # IRasterSurface：渲染接口
-├─ src/vulkan_renderer.*
-├─ src/gpu/
+├─ src/renderer.*                  # 渲染编排层（装配并驱动 GPU 后端）
+├─ src/gpu/                        # RHI 与后端：rhi.h、backend_factory、vulkan/、metal/
 └─ src/ui/
 
 platform/                          # 各端平台适配源码（不含工程文件）
@@ -21,8 +21,8 @@ platform/                          # 各端平台适配源码（不含工程文�
 ├─ hongmeng/
 │  └─ cpp/                         # NAPI + HongmengPlatform
 └─ ios/
-   ├─ ios_shell_bridge.*           # C 桥 + CAMetal + IosPlatform
-   └─ ios_vulkan_platform.mm
+   ├─ ios_shell_bridge.*           # C 桥 + CAMetalLayer + IosPlatform
+   └─ ios_platform.mm              # 持有 CAMetalLayer*，供 Metal 后端
 
 samples/                           # 每个子目录是一个完整 App（业务 + 三端工程）
 └─ triangle/
@@ -49,22 +49,29 @@ samples/                           # 每个子目录是一个完整 App（业务
 
 - **`svk::IApp`**（`core/src/app.h`）：App 公共接口；平台宿主在每帧调用
   `onFrame`，具体实现由各 App 的 `createApp()` 提供。
-- **`svk::IPlatform`**（`core/src/render_platform.h`）：创建 `VkSurfaceKHR`、
-  查询绘制区尺寸；MoltenVK（iOS）的额外要求也经可选钩子声明。
+- **`svk::IPlatform`**（`core/src/render_platform.h`）：返回后端无关的
+  原生窗口句柄（Android `ANativeWindow*` / iOS `CAMetalLayer*` / 鸿蒙
+  `OHNativeWindow*`）并查询绘制区尺寸；surface 创建由各 GPU 后端完成。
 - **`svk::IRasterSurface`**（`core/src/raster_surface.h`）：渲染器接口，
-  平台壳只依赖它，不感知 Vulkan 实现。
-- **`svk::Renderer`**（`core/src/vulkan_renderer.*`）：帧编排
-  acquire → 上传顶点 → 录制 → 提交 → present；含 surface 旋转补偿、
-  swapchain 重建重试、保活挂起/恢复。
-- **gpu/ 子模块**：`VulkanContext`（instance/设备）、`Swapchain`
-  （交换链/MSAA/render pass/framebuffer）、`UiPipeline`（图形管线）、
-  `TextureCache`（1x1 白纹理，纯色批次的采样对象）。
+  平台壳只依赖它，不感知具体 GPU 后端（Vulkan/Metal）。
+- **`svk::Renderer`**（`core/src/renderer.*`）：渲染编排层——按装配点
+  创建后端、驱动设备级/surface 级初始化与保活挂起/恢复，定义帧重试
+  语义与日志；帧执行在 `gpu/vulkan/vulkan_backend` 与
+  `gpu/metal/metal_backend`。
+- **双后端装配**（`core/src/gpu/rhi.h`、`gpu/backend_factory.cpp`）：
+  iOS 工程定义 `SVK_METAL_BACKEND=1` 时装配 Metal 后端；Android、鸿蒙
+  与 host 构建装配 Vulkan 后端。
+- **gpu/ 子模块**：`gpu/vulkan/` 下 `VulkanContext`（instance/设备）、
+  `Swapchain`（交换链/MSAA/render pass/framebuffer）、`UiPipeline`
+  （图形管线）、`TextureCache`（1x1 白纹理，纯色批次的采样对象）；
+  `gpu/metal/` 为 iOS 原生 Metal 后端（内嵌 MSL 源，运行时编译）。
 - **`ui::Canvas`**（`core/src/ui/canvas.*`）：每帧顶点流收集器
   （立即模式），`drawTriangle` / `drawRect`，clip 合批。
 
 着色公式统一为 `顶点色 × 纹理`：纯色几何绑 1x1 白纹理，采样恒为 1，
-GPU 顶点插值免费得到渐变。SPIR-V 在构建期由 `glslc` 编译并内嵌进二进制
-（`cmake/embed_shaders.cmake`），运行时零文件读取。
+GPU 顶点插值免费得到渐变。Vulkan 后端的 SPIR-V 在构建期由 `glslc` 编译并
+内嵌进二进制（`cmake/embed_shaders.cmake`），运行时零文件读取；iOS Metal
+后端以内嵌 MSL 源字符串在运行时编译。
 
 C++ 日志会保留各端终端输出，并经有界异步队列写入应用私有日志文件，
 兼顾问题复现与高频业务场景。引擎模块、资源所有权、帧流程、简化点和日志
@@ -99,15 +106,9 @@ samples/triangle/android/app/build/outputs/apk/debug/app-debug.apk
 
 ### iOS
 
-首次构建前拉取 MoltenVK，并确保本机有 CMake 与 glslc：
-
-```bash
-./third_party/moltenvk/fetch.sh
-brew install cmake shaderc
-```
-
-用 Xcode 打开 `samples/triangle/ios/SVKApp.xcodeproj`，或命令行做无签名
-编译验证：
+iOS 走原生 Metal 后端：着色器以内嵌 MSL 源在运行时编译，构建不需要
+glslc、CMake 等额外工具。用 Xcode 打开 `samples/triangle/ios/SVKApp.xcodeproj`，
+或命令行做无签名编译验证：
 
 ```bash
 xcodebuild \

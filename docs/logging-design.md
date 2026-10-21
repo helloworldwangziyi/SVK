@@ -1,6 +1,6 @@
 # 日志系统设计：从渲染引擎到期货金融 App
 
-本文记录 `svk` 日志体系的演进设计：以当前 `core/src/log.h` 为起点，
+本文记录 `svk` 日志体系的演进设计：以当前 `core/src/log/log.h` 为起点，
 逐步适配移动端渲染引擎的高频场景，以及后续期货金融类 App 的可靠性与合规要求。
 实现按文末路线图分阶段推进，每阶段完成后更新状态。
 
@@ -41,7 +41,7 @@ QuoteRecorder（行情数据，业务层独立模块）
 
 ## 4. 现状盘点（已具备）
 
-`core/src/log.h` 当前能力（详见 docs/engine-core.md 第 10 节）：
+`core/src/log/log.h` 当前能力（详见 docs/engine-core.md 第 10 节）：
 
 - header-only spdlog 封装；`[svk][<feature>][<event> key=value]` 结构化正文。
 - 终端 sink（Logcat / HiLog / stdout）+ 可追加文件 sink；有界异步队列
@@ -66,8 +66,8 @@ QuoteRecorder（行情数据，业务层独立模块）
 ### 5.2 帧号关联
 
 `svk::log::setFrameSeq(seq)` 写 `thread_local` 当前帧号，日志统一出口自动附加
-`frame=` 字段，掉帧/重建类日志直接定位到帧。renderer 每帧调用一次即可
-（引擎单线程模型，开销可忽略）；renderer 侧的接线待引擎重构稳定后接入。
+`frame=` 字段，掉帧/重建类日志直接定位到帧。renderer 已在每帧 `render()`
+入口设置、`suspendSurface()` 时清除（引擎单线程模型，开销可忽略）。
 
 ### 5.3 编译期与运行时级别
 

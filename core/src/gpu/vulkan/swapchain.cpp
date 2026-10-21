@@ -2,12 +2,12 @@
  * @file swapchain.cpp
  * @brief 交换链模块实现：swapchain、image view、MSAA 颜色图、render pass 与 framebuffer。
  */
-#include "gpu/swapchain.h"
+#include "gpu/vulkan/swapchain.h"
 
 // VulkanContext：设备 / surface / 平台尺寸查询与显存类型查找。
-#include "gpu/vulkan_context.h"
+#include "gpu/vulkan/vulkan_context.h"
 // SVK_LOGI/E 日志宏：spdlog 封装，全局统一的日志入口。
-#include "log.h"
+#include "log/log.h"
 
 // std::max / std::min / std::swap：交换链尺寸的边界 clamp 与 90/270 宽高互换。
 #include <algorithm>
@@ -126,7 +126,7 @@ bool Swapchain::createSwapchain() {
     VkExtent2D extent;
     // 如果 surface 固定了尺寸，Vulkan 会直接给出精确的 extent。
     // UINT32_MAX 是规范约定的"尺寸不固定"标记；这里先处理"已固定"的常见分支（多数手机如此）。
-    // 例外：MoltenVK 在 layer 尚未布局（bounds 为 0）时上报 0×0——零尺寸交换链无效，
+    // 例外：部分平台在窗口尚未布局（bounds 为 0）时上报 0×0——零尺寸交换链无效，
     // 与 UINT32_MAX 一样走平台尺寸分支。
     if (caps.currentExtent.width != UINT32_MAX &&
         caps.currentExtent.width > 0 && caps.currentExtent.height > 0) {
