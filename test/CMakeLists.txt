@@ -10,3 +10,12 @@ target_include_directories(test_log PRIVATE
 target_link_libraries(test_log PRIVATE Threads::Threads)
 
 add_test(NAME test_log COMMAND test_log)
+
+add_executable(test_recorder test_recorder.cpp)
+target_include_directories(test_recorder PRIVATE
+    ${CMAKE_SOURCE_DIR}/core/src
+    ${CMAKE_SOURCE_DIR}/third_party/spdlog/include
+)
+target_link_libraries(test_recorder PRIVATE Threads::Threads)
+
+add_test(NAME test_recorder COMMAND test_recorder)

@@ -108,9 +108,13 @@ Java/Objective-C/ArkTS 的生命周期日志目前只进 Logcat/控制台/HiLog�
 
 ### 7.3 缓冲与写盘
 
-- 业务线程 `write(tick)` 只写内存环形缓冲（默认 1MB）。
+- 业务线程 `write(tick)` 只写内存帧队列（默认 1MB；有界 deque，与环形缓冲
+  同等语义），满则覆盖最老帧并计入 `dropped`。
 - 后台线程满 64KB 或 1s 批量落盘一次；页面 flush 不过勤，兼顾闪存与电量。
 - 崩溃保全：后续换 mmap 写（Mars xlog 同款思路），崩溃时已基本落盘。
+- 文件名带毫秒与序号后缀，快速连续轮转不重名。
+- 第四层防线落地为业务钩子：`isDropping()` / `stats()` 暴露丢弃压力，
+  业务据此降级采样（全量 → 每秒快照 → 只录自选合约）。
 
 ### 7.4 文件组织
 
@@ -156,7 +160,7 @@ quotes/<trading_day>/<prefix>-HHMMSS.qlog
 | ② | 多通道分离：审计通道独立文件、同步直写（等价不丢，较 block 队列更简单） | 已完成 |
 | ③ | 文件 rotation（单文件上限切分）与过期/总量清理 | 已完成 |
 | ④ | 启动 session 头、运行时级别下发（`setLevels`/`setFileLevel`） | 已完成 |
-| ⑤ | QuoteRecorder 写路径：环形缓冲 + 后台落盘 + 四层防线 | 未开始 |
+| ⑤ | QuoteRecorder 写路径：有界缓冲 + 后台落盘 + 四层防线（`core/src/recorder/binary_recorder.h`） | 已完成 |
 | ⑥ | QuoteReader：过滤、导出、回放 | 未开始 |
 | ⑦ | 崩溃保全：signal handler flush → mmap sink | 未开始 |
 | ⑧ | 合规：脱敏、落盘加密、回捞上传 | 未开始 |
