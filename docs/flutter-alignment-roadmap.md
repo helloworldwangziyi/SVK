@@ -6,7 +6,7 @@
 
 `third_party/flutter-engine/` 是上游 Flutter engine 仓库 `src/flutter/` 的裸拷贝（约 70MB，BSD 协议，无 git/版本锁定，2026-10-19 入库，提交 `8db2ba1`）。其中 Dart 强耦合部分（`lib/ui/`、`runtime/`、tonic）不用；C++ 部分（`impeller/`、`flow/`、`display_list/`、`fml/`、`shell/`、`txt/`）完整可读。
 
-**目标**：保持 `svp_core` 的 C++17 + Vulkan 技术栈与三端壳结构不变，在架构上全量对齐 Flutter 引擎的渲染管线分层，最终形态为"Flutter 引擎的 C++ 骨架"：
+**目标**：保持 `svk_core` 的 C++17 + Vulkan 技术栈与三端壳结构不变，在架构上全量对齐 Flutter 引擎的渲染管线分层，最终形态为"Flutter 引擎的 C++ 骨架"：
 
 ```text
 Widget 树（C++）→ Layer 树 → DisplayList → Vulkan 渲染核 → 平台壳
@@ -117,7 +117,7 @@ platform/{android,ios,hongmeng}/  平台壳（不变，按需补事件注入）
 
 ## 5. 工程纪律
 
-1. **抄架构不抄代码**：flutter-engine 目录只读；所有实现用本项目风格重写，保持 header 注释、命名、`SVP_LOG*` 日志习惯。
+1. **抄架构不抄代码**：flutter-engine 目录只读；所有实现用本项目风格重写，保持 header 注释、命名、`SVK_LOG*` 日志习惯。
 2. **每层 host 可测**：新层做成平台无关（参照 log.h 的 header-only 先例），在 `test/` 下配 `test_dl`、`test_compositor`、`test_widget` 等独立 target，复用现有 CHECK + ctest 模式。
 3. **每阶段端到端可跑**：不允许"架构到位但 samples 跑不起来"的中间态；每个阶段收尾时三端 samples 必须正常渲染。
 4. **文档同步**：阶段完成时更新 `docs/engine-core.md` 的模块清单与能力列表。

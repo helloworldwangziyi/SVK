@@ -17,7 +17,7 @@
 flowchart TB
     subgraph shell["平台薄壳（只做壳装配，无业务）"]
         A1["Android<br/>VulkanSurfaceView + Choreographer"]
-        A2["iOS<br/>SVPMetalView + CADisplayLink"]
+        A2["iOS<br/>SVKMetalView + CADisplayLink"]
         A3["鸿蒙<br/>XComponent + DisplaySync"]
     end
 
@@ -27,7 +27,7 @@ flowchart TB
         B3["NAPI<br/>hongmeng_napi_bridge.cpp"]
     end
 
-    subgraph core["core（平台无关，svp_core）"]
+    subgraph core["core（平台无关，svk_core）"]
         C1["IApp.onFrame<br/>App 写顶点"]
         C2["ui::Canvas<br/>CPU 顶点流 + Batch"]
         C3["Renderer (IRasterSurface)<br/>acquire → 上传 → 录制 → 提交 → present"]
@@ -60,14 +60,14 @@ flowchart TB
 | 环节 | Android | iOS | 鸿蒙 |
 |---|---|---|---|
 | 进程入口 | `MainActivity.onCreate` | `main.m → UIApplicationMain` | `EntryAbility.onCreate` |
-| 日志目录注入 | `nativeSetLogDirectory(filesDir/logs)` | `svpIosInit` 内自取 `Application Support/logs` | `OH_AbilityRuntime_ApplicationContextGetFilesDir()` |
-| surface 载体 | `SurfaceView`（SurfaceHolder.Callback） | `CAMetalLayer`（SVPMetalView 的 backing layer） | `XComponent(SURFACE)` 的 `OHNativeWindow` |
-| 引擎启动触发 | `surfaceCreated` → `nativeInit` | `viewDidAppear` → `svpIosInit` | `OnSurfaceCreatedCB`（XComponent 回调） |
+| 日志目录注入 | `nativeSetLogDirectory(filesDir/logs)` | `svkIosInit` 内自取 `Application Support/logs` | `OH_AbilityRuntime_ApplicationContextGetFilesDir()` |
+| surface 载体 | `SurfaceView`（SurfaceHolder.Callback） | `CAMetalLayer`（SVKMetalView 的 backing layer） | `XComponent(SURFACE)` 的 `OHNativeWindow` |
+| 引擎启动触发 | `surfaceCreated` → `nativeInit` | `viewDidAppear` → `svkIosInit` | `OnSurfaceCreatedCB`（XComponent 回调） |
 | VSync 通道 | `Choreographer.postFrameCallback` | `CADisplayLink`（common runloop modes） | ArkTS `displaySync.on('frame')` |
-| 帧回调入口 | `nativeBeginFrame(frameTimeNanos)` | `svpIosBeginFrame(nanos)`（steady_clock） | `beginFrame(intervalInfo.timestamp)` |
-| 尺寸变化 | `surfaceChanged` → `nativeResize` | `layoutSubviews` → `svpIosResize` | `OnSurfaceChangedCB` |
-| 保活挂起 | `surfaceDestroyed` → `nativeDestroy` | `viewWillDisappear` → `svpIosSuspend` | `OnSurfaceDestroyedCB` |
-| 真正销毁 | `Activity.onDestroy` → `nativeShutdown` | `ViewController.dealloc` → `svpIosShutdown` | `EntryAbility.onDestroy` → `onShutdown()` |
+| 帧回调入口 | `nativeBeginFrame(frameTimeNanos)` | `svkIosBeginFrame(nanos)`（steady_clock） | `beginFrame(intervalInfo.timestamp)` |
+| 尺寸变化 | `surfaceChanged` → `nativeResize` | `layoutSubviews` → `svkIosResize` | `OnSurfaceChangedCB` |
+| 保活挂起 | `surfaceDestroyed` → `nativeDestroy` | `viewWillDisappear` → `svkIosSuspend` | `OnSurfaceDestroyedCB` |
+| 真正销毁 | `Activity.onDestroy` → `nativeShutdown` | `ViewController.dealloc` → `svkIosShutdown` | `EntryAbility.onDestroy` → `onShutdown()` |
 | native 库加载 | `System.loadLibrary("estarx_vulkan")` | 静态链接进 App 二进制 | `dlopen` 后构造函数自动 `napi_module_register` |
 
 ## 3. 冷启动时序
@@ -109,7 +109,7 @@ sequenceDiagram
     participant Sys as UIKit
     participant Del as AppDelegate
     participant VC as ViewController
-    participant View as SVPMetalView<br/>（CAMetalLayer）
+    participant View as SVKMetalView<br/>（CAMetalLayer）
     participant CBridge as C 桥<br/>ios_shell_bridge
     participant Core as core 引擎
 
@@ -119,9 +119,9 @@ sequenceDiagram
     VC->>Sys: viewDidLoad：CADisplayLink 挂 mainRunLoop(commonModes)
     Sys-->>View: layoutSubviews
     View->>View: drawableSize = bounds × nativeScale
-    View->>CBridge: svpIosResize(w, h)
+    View->>CBridge: svkIosResize(w, h)
     Sys-->>VC: viewDidAppear
-    VC->>CBridge: svpIosInit(CAMetalLayer)
+    VC->>CBridge: svkIosInit(CAMetalLayer)
     Note over CBridge,Core: 走共享主干（3.4），surface 由<br/>vkCreateMetalSurfaceEXT 经 MoltenVK 创建
     Sys-->>VC: onDisplayLink（每个 VSync）
     Note over VC: 取 steady_clock 单调秒数，与另两端语义一致
@@ -174,7 +174,7 @@ sequenceDiagram
     participant GPU as gpu 子模块
     participant App as IApp（TriangleApp）
 
-    Bridge->>Plat: svpCreate<平台>Platform(原生窗口)
+    Bridge->>Plat: svkCreate<平台>Platform(原生窗口)
     Note over Bridge: g_renderer 已存在 → 走热恢复（第 6 节）<br/>以下按冷启动（g_renderer == null）
     Bridge->>R: createRasterSurface(platform)
     Bridge->>R: initialize()
@@ -282,12 +282,12 @@ sequenceDiagram
     R->>R: vkDeviceWaitIdle
     R->>R: 销毁 UiPipeline + Swapchain 相关 + VkSurfaceKHR
     Note over R: 保留：Instance/Device/TextureCache/<br/>CommandPool/顶点缓冲/同步对象
-    Bridge->>Plat: svpDestroy<平台>Platform(g_platform)
+    Bridge->>Plat: svkDestroy<平台>Platform(g_platform)
     Note over Bridge: 释放壳侧窗口引用（ANativeWindow / 全局引用等）
 
     Note over Sys: 回前台（surface 重建）
     Sys-->>Bridge: surfaceCreated / viewDidAppear / OnSurfaceCreatedCB
-    Bridge->>Plat: svpCreate<平台>Platform(新窗口)
+    Bridge->>Plat: svkCreate<平台>Platform(新窗口)
     Bridge->>R: resumeSurface(newPlatform)
     R->>R: 只重建 surface → swapchain → 管线 → 帧缓冲
     alt 热恢复成功
@@ -299,7 +299,7 @@ sequenceDiagram
 ```
 
 挂起与恢复的真正销毁对照：Activity.onDestroy / ViewController.dealloc /
-EntryAbility.onDestroy → `nativeShutdown` / `svpIosShutdown` / `onShutdown`，
+EntryAbility.onDestroy → `nativeShutdown` / `svkIosShutdown` / `onShutdown`，
 做全量释放（app.reset → delete renderer → destroy platform），之后再次启动
 走完整冷启动。
 
@@ -310,6 +310,6 @@ EntryAbility.onDestroy → `nativeShutdown` / `svpIosShutdown` / `onShutdown`，
 | 公共接口 | `core/src/app.h`、`core/src/render_platform.h`、`core/src/raster_surface.h` |
 | 引擎 | `core/src/vulkan_renderer.*`、`core/src/gpu/*`、`core/src/ui/canvas.*` |
 | Android | `platform/android/java/.../VulkanSurfaceView.java`、`NativeBridge.java`、`platform/android/cpp/android_jni_bridge.cpp`、`android_vulkan_platform.cpp` |
-| iOS | `samples/triangle/ios/SVPApp/ViewController.mm`、`platform/ios/ios_shell_bridge.mm`、`ios_vulkan_platform.mm` |
+| iOS | `samples/triangle/ios/SVKApp/ViewController.mm`、`platform/ios/ios_shell_bridge.mm`、`ios_vulkan_platform.mm` |
 | 鸿蒙 | `samples/triangle/hongmeng/entry/src/main/ets/vulkan/VulkanShell.ets`、`entryability/EntryAbility.ets`、`platform/hongmeng/cpp/hongmeng_napi_bridge.cpp`、`hongmeng_vulkan_platform.cpp` |
 | App 示例 | `samples/triangle/app.cpp`、`samples/triangle/triangle.h` |

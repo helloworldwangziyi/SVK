@@ -6,19 +6,19 @@
 
 // VulkanContext：设备句柄与显存类型查找。
 #include "gpu/vulkan_context.h"
-// SVP_LOGE 日志宏：spdlog 封装，全局统一的日志入口。
+// SVK_LOGE 日志宏：spdlog 封装，全局统一的日志入口。
 #include "log.h"
 
 // std::memset：白纹理像素写入。
 #include <cstring>
 
-namespace svp::gpu {
+namespace svk::gpu {
 
 TextureCache::TextureCache(VulkanContext& context) : context_(context) {}
 
 bool TextureCache::initialize() {
     const VkDevice device = context_.device();
-    SVP_LOGI("texture", "initialize_start");
+    SVK_LOGI("texture", "initialize_start");
 
     // 采样器：线性过滤 + 边缘钳制。白纹理只有一个纹素，参数实际上无所谓，
     // 保留完整配置以便后续接入真实纹理时无需改动。
@@ -32,10 +32,10 @@ bool TextureCache::initialize() {
     samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     samplerInfo.maxLod = VK_LOD_CLAMP_NONE;
     if (vkCreateSampler(device, &samplerInfo, nullptr, &sampler_) != VK_SUCCESS) {
-        SVP_LOGE("texture", "create_sampler_failed");
+        SVK_LOGE("texture", "create_sampler_failed");
         return false;
     }
-    SVP_LOGI("texture", "sampler_created filter=linear address=clamp_to_edge");
+    SVK_LOGI("texture", "sampler_created filter=linear address=clamp_to_edge");
 
     // descriptor 布局：binding 0 = 组合图像采样器，片元阶段可读。
     VkDescriptorSetLayoutBinding binding{};
@@ -49,10 +49,10 @@ bool TextureCache::initialize() {
     layoutInfo.pBindings = &binding;
     if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr,
                                     &descriptorSetLayout_) != VK_SUCCESS) {
-        SVP_LOGE("texture", "create_descriptor_set_layout_failed");
+        SVK_LOGE("texture", "create_descriptor_set_layout_failed");
         return false;
     }
-    SVP_LOGI("texture", "descriptor_layout_created bindings={}", layoutInfo.bindingCount);
+    SVK_LOGI("texture", "descriptor_layout_created bindings={}", layoutInfo.bindingCount);
 
     VkDescriptorPoolSize poolSize{};
     poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -64,21 +64,21 @@ bool TextureCache::initialize() {
     poolInfo.pPoolSizes = &poolSize;
     if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &descriptorPool_) !=
         VK_SUCCESS) {
-        SVP_LOGE("texture", "create_descriptor_pool_failed");
+        SVK_LOGE("texture", "create_descriptor_pool_failed");
         return false;
     }
-    SVP_LOGI("texture", "descriptor_pool_created max_sets={}", poolInfo.maxSets);
+    SVK_LOGI("texture", "descriptor_pool_created max_sets={}", poolInfo.maxSets);
 
     if (!createWhiteTexture()) {
         return false;
     }
-    SVP_LOGI("texture", "initialize_complete");
+    SVK_LOGI("texture", "initialize_complete");
     return true;
 }
 
 bool TextureCache::createWhiteTexture() {
     const VkDevice device = context_.device();
-    SVP_LOGI("texture", "white_texture_create_start size=1x1 format=rgba8");
+    SVK_LOGI("texture", "white_texture_create_start size=1x1 format=rgba8");
 
     // 白纹理：RGBA8 1x1，四个通道都是 255（采样 = vec4(1)）。
     VkImageCreateInfo imageInfo{};
@@ -94,10 +94,10 @@ bool TextureCache::createWhiteTexture() {
     imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     if (vkCreateImage(device, &imageInfo, nullptr, &image_) != VK_SUCCESS) {
-        SVP_LOGE("texture", "create_white_image_failed");
+        SVK_LOGE("texture", "create_white_image_failed");
         return false;
     }
-    SVP_LOGI("texture", "white_image_created");
+    SVK_LOGI("texture", "white_image_created");
 
     VkMemoryRequirements memReq;
     vkGetImageMemoryRequirements(device, image_, &memReq);
@@ -107,14 +107,14 @@ bool TextureCache::createWhiteTexture() {
     allocInfo.memoryTypeIndex = context_.findMemoryType(
         memReq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
     if (vkAllocateMemory(device, &allocInfo, nullptr, &imageMemory_) != VK_SUCCESS) {
-        SVP_LOGE("texture", "allocate_white_image_memory_failed");
+        SVK_LOGE("texture", "allocate_white_image_memory_failed");
         return false;
     }
     if (vkBindImageMemory(device, image_, imageMemory_, 0) != VK_SUCCESS) {
-        SVP_LOGE("texture", "bind_white_image_memory_failed");
+        SVK_LOGE("texture", "bind_white_image_memory_failed");
         return false;
     }
-    SVP_LOGI("texture", "white_image_memory_bound bytes={} memory_type={}",
+    SVK_LOGI("texture", "white_image_memory_bound bytes={} memory_type={}",
              memReq.size, allocInfo.memoryTypeIndex);
 
     VkImageViewCreateInfo viewInfo{};
@@ -126,10 +126,10 @@ bool TextureCache::createWhiteTexture() {
     viewInfo.subresourceRange.levelCount = 1;
     viewInfo.subresourceRange.layerCount = 1;
     if (vkCreateImageView(device, &viewInfo, nullptr, &imageView_) != VK_SUCCESS) {
-        SVP_LOGE("texture", "create_white_image_view_failed");
+        SVK_LOGE("texture", "create_white_image_view_failed");
         return false;
     }
-    SVP_LOGI("texture", "white_image_view_created");
+    SVK_LOGI("texture", "white_image_view_created");
 
     VkDescriptorSetAllocateInfo setInfo{};
     setInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
@@ -137,7 +137,7 @@ bool TextureCache::createWhiteTexture() {
     setInfo.descriptorSetCount = 1;
     setInfo.pSetLayouts = &descriptorSetLayout_;
     if (vkAllocateDescriptorSets(device, &setInfo, &descriptorSet_) != VK_SUCCESS) {
-        SVP_LOGE("texture", "allocate_white_descriptor_set_failed");
+        SVK_LOGE("texture", "allocate_white_descriptor_set_failed");
         return false;
     }
     VkDescriptorImageInfo descImage{};
@@ -152,7 +152,7 @@ bool TextureCache::createWhiteTexture() {
     write.descriptorCount = 1;
     write.pImageInfo = &descImage;
     vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
-    SVP_LOGI("texture", "white_texture_ready binding=0");
+    SVK_LOGI("texture", "white_texture_ready binding=0");
     return true;
 }
 
@@ -208,7 +208,7 @@ void TextureCache::uploadPendingTextures(VkCommandBuffer cmd) {
                          nullptr, 1, &toRead);
 
     uploaded_ = true;
-    SVP_LOGI("texture", "white_texture_uploaded layout=shader_read_only");
+    SVK_LOGI("texture", "white_texture_uploaded layout=shader_read_only");
     (void)device;
 }
 
@@ -242,4 +242,4 @@ void TextureCache::shutdown() {
     uploaded_ = false;
 }
 
-} // namespace svp::gpu
+} // namespace svk::gpu

@@ -6,7 +6,7 @@
 
 #include "log.h"
 
-namespace svp {
+namespace svk {
 
 class AndroidPlatform : public IPlatform {
 public:
@@ -22,7 +22,7 @@ public:
         if (window_) {
             ANativeWindow_release(window_);
         }
-        // surface_ 是全局引用（见 svpCreateAndroidPlatform），析构时必须释放。
+        // surface_ 是全局引用（见 svkCreateAndroidPlatform），析构时必须释放。
         if (surface_ && jvm_) {
             JNIEnv* env = nullptr;
             bool attached = false;
@@ -46,12 +46,12 @@ public:
 
     bool createVulkanSurface(VkInstance instance, VkSurfaceKHR* surface) override {
         if (!surface_) {
-            SVP_LOGE("android", "surface_create_failed reason=surface_null");
+            SVK_LOGE("android", "surface_create_failed reason=surface_null");
             return false;
         }
 
         if (!window_) {
-            SVP_LOGE("android", "surface_create_failed reason=native_window_failed");
+            SVK_LOGE("android", "surface_create_failed reason=native_window_failed");
             return false;
         }
 
@@ -60,7 +60,7 @@ public:
         createInfo.window = window_;
 
         if (vkCreateAndroidSurfaceKHR(instance, &createInfo, nullptr, surface) != VK_SUCCESS) {
-            SVP_LOGE("android", "surface_create_failed reason=vulkan_surface_failed");
+            SVK_LOGE("android", "surface_create_failed reason=vulkan_surface_failed");
             return false;
         }
         return true;
@@ -90,18 +90,18 @@ void destroyAndroidPlatform(IPlatform* platform) {
     delete platform;
 }
 
-} // namespace svp
+} // namespace svk
 
 extern "C" {
 // 以 C 链接导出工厂函数，JNI 桥接层无需感知类的内存布局。
-svp::IPlatform* svpCreateAndroidPlatform(JNIEnv* env, jobject surface) {
+svk::IPlatform* svkCreateAndroidPlatform(JNIEnv* env, jobject surface) {
     // Java 传来的 surface 是 JNI 局部引用，nativeInit 返回后即失效；
     // 跨调用持有必须先提升为全局引用（析构时 DeleteGlobalRef，见 ~AndroidPlatform）。
     jobject globalSurface = surface ? env->NewGlobalRef(surface) : nullptr;
-    return svp::createAndroidPlatform(env, globalSurface);
+    return svk::createAndroidPlatform(env, globalSurface);
 }
 
-void svpDestroyAndroidPlatform(svp::IPlatform* platform) {
-    svp::destroyAndroidPlatform(platform);
+void svkDestroyAndroidPlatform(svk::IPlatform* platform) {
+    svk::destroyAndroidPlatform(platform);
 }
 } // extern "C"

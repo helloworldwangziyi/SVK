@@ -25,7 +25,7 @@
 
 #include "log.h"
 
-namespace svp {
+namespace svk {
 
 class IosPlatform : public IPlatform {
 public:
@@ -38,7 +38,7 @@ public:
 
     bool createVulkanSurface(VkInstance instance, VkSurfaceKHR* surface) override {
         if (!layer_) {
-            SVP_LOGE("ios", "surface_create_failed reason=metal_layer_null");
+            SVK_LOGE("ios", "surface_create_failed reason=metal_layer_null");
             return false;
         }
         VkMetalSurfaceCreateInfoEXT createInfo{};
@@ -46,7 +46,7 @@ public:
         createInfo.pLayer = layer_;
         if (vkCreateMetalSurfaceEXT(instance, &createInfo, nullptr, surface) !=
             VK_SUCCESS) {
-            SVP_LOGE("ios", "surface_create_failed reason=vulkan_surface_failed");
+            SVK_LOGE("ios", "surface_create_failed reason=vulkan_surface_failed");
             return false;
         }
         return true;
@@ -101,17 +101,17 @@ void destroyIosPlatform(IPlatform* platform) {
     delete platform;
 }
 
-} // namespace svp
+} // namespace svk
 
 extern "C" {
 
 // C 链接工厂：桥接层只需声明原型，无需知道 IosPlatform 类布局。
-svp::IPlatform* svpCreateIosPlatform(const void* layer) {
-    return svp::createIosPlatform((__bridge CAMetalLayer*)layer);
+svk::IPlatform* svkCreateIosPlatform(const void* layer) {
+    return svk::createIosPlatform((__bridge CAMetalLayer*)layer);
 }
 
-void svpDestroyIosPlatform(svp::IPlatform* platform) {
-    svp::destroyIosPlatform(platform);
+void svkDestroyIosPlatform(svk::IPlatform* platform) {
+    svk::destroyIosPlatform(platform);
 }
 
 } // extern "C"

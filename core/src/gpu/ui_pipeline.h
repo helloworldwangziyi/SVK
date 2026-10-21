@@ -6,7 +6,7 @@
  */
 #include <vulkan/vulkan.h>
 
-namespace svp::gpu {
+namespace svk::gpu {
 
 class VulkanContext;
 
@@ -49,4 +49,4 @@ private:
     VkPipeline pipeline_ = VK_NULL_HANDLE;
 };
 
-} // namespace svp::gpu
+} // namespace svk::gpu

@@ -8,11 +8,11 @@
 #include <cstdint>
 #include <vector>
 
-namespace svp {
+namespace svk {
 
 /**
  * @brief 平台抽象接口。渲染器经它创建 VkSurfaceKHR、查询绘制区尺寸；
- * 日志不经过本接口，统一走 svp/log.h（SVP_LOG* 宏）。
+ * 日志不经过本接口，统一走 svk/log.h（SVK_LOG* 宏）。
  */
 class IPlatform {
 public:
@@ -65,4 +65,4 @@ public:
         std::vector<const char*>& /*out*/) const {}
 };
 
-} // namespace svp
+} // namespace svk

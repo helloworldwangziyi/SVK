@@ -4,11 +4,11 @@
 // iOS 壳层 ↔ core 的 C 桥接口（最小形态）。对照 Android 侧 NativeBridge 的
 // JNI 方法表：
 //
-//   NativeBridge.nativeInit(Surface)     → svpIosInit(CAMetalLayer*)（含热恢复）
-//   NativeBridge.nativeResize(w, h)      → svpIosResize(w, h)
-//   NativeBridge.nativeBeginFrame(nanos) → svpIosBeginFrame(nanos)
-//   NativeBridge.nativeDestroy()         → svpIosSuspend()（挂起）
-//   NativeBridge.nativeShutdown()        → svpIosShutdown()（真正销毁）
+//   NativeBridge.nativeInit(Surface)     → svkIosInit(CAMetalLayer*)（含热恢复）
+//   NativeBridge.nativeResize(w, h)      → svkIosResize(w, h)
+//   NativeBridge.nativeBeginFrame(nanos) → svkIosBeginFrame(nanos)
+//   NativeBridge.nativeDestroy()         → svkIosSuspend()（挂起）
+//   NativeBridge.nativeShutdown()        → svkIosShutdown()（真正销毁）
 //
 // 约定与 JNI 层相同：本层只做"解包参数 → 转发 core"，不含业务逻辑；
 // 所有函数都在 iOS 主线程（= UI 线程）调用。
@@ -24,17 +24,17 @@ extern "C" {
 // 视图/surface 就绪（viewDidAppear / 回前台）时调用，可能多次。
 // 引擎已存在时走保活热恢复（按新 layer 重建 surface 级资源），
 // 否则冷启动；失败时清理现场，保证下次调用能干净重试。
-void svpIosInit(const void* layer);
-void svpIosResize(int32_t width, int32_t height);
+void svkIosInit(const void* layer);
+void svkIosResize(int32_t width, int32_t height);
 // CADisplayLink 的帧回调：由 C++ App 构建本帧内容并提交渲染。
-void svpIosBeginFrame(int64_t frameTimeNanos);
+void svkIosBeginFrame(int64_t frameTimeNanos);
 // 视图/surface 销毁（viewWillDisappear / 退后台）语义 = 保活挂起：
 // 只释放 surface 级资源，引擎级资源（设备/纹理/命令设施）全部保留，
-// 下次 svpIosInit 热恢复，不重走冷启动。
-void svpIosSuspend(void);
+// 下次 svkIosInit 热恢复，不重走冷启动。
+void svkIosSuspend(void);
 // 真正销毁（壳层 dealloc / 明确的 terminate 路径）：全量释放，
 // 之后若再启动走完整冷启动流程。
-void svpIosShutdown(void);
+void svkIosShutdown(void);
 
 #ifdef __cplusplus
 } // extern "C"

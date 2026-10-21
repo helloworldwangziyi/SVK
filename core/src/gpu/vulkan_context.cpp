@@ -4,7 +4,7 @@
  */
 #include "gpu/vulkan_context.h"
 
-// SVP_LOGD/I/W/E 日志宏：spdlog 封装，全局统一的日志入口。
+// SVK_LOGD/I/W/E 日志宏：spdlog 封装，全局统一的日志入口。
 #include "log.h"
 
 // std::strcmp：比较扩展/校验层名字。
@@ -12,7 +12,7 @@
 // std::vector：承接 Vulkan 枚举惯用法返回的列表。
 #include <vector>
 
-namespace svp::gpu {
+namespace svk::gpu {
 
 // ---- 辅助函数 ----
 
@@ -30,13 +30,13 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
     // severity 是位掩码且按位递增，用 >= 比较即可分级，Debug 兜底。
     // validation 功能域便于单独过滤 Vulkan 校验层输出。
     if (severity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) {
-        SVP_LOGE("validation", "message text={}", data->pMessage);
+        SVK_LOGE("validation", "message text={}", data->pMessage);
     } else if (severity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
-        SVP_LOGW("validation", "message text={}", data->pMessage);
+        SVK_LOGW("validation", "message text={}", data->pMessage);
     } else if (severity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT) {
-        SVP_LOGI("validation", "message text={}", data->pMessage);
+        SVK_LOGI("validation", "message text={}", data->pMessage);
     } else {
-        SVP_LOGD("validation", "message text={}", data->pMessage);
+        SVK_LOGD("validation", "message text={}", data->pMessage);
     }
     // 返回 VK_FALSE 表示"不中止触发这条消息的 Vulkan 调用"：校验层只报告、不改变程序行为；
     // 返回 VK_TRUE 才会让该调用以 VK_ERROR_VALIDATION_FAILED_EXT 失败（几乎只用于调试）。
@@ -93,16 +93,16 @@ VulkanContext::~VulkanContext() {
 
 bool VulkanContext::initialize() {
     // 按依赖顺序搭建 Vulkan 栈。每一步都依赖前一步，所以任何一环失败都会立刻停止启动。
-    SVP_LOGI("vulkan", "initialize_start");
+    SVK_LOGI("vulkan", "initialize_start");
     // ① 地基：VkInstance 是 Vulkan 入口；surface 必须基于 instance 创建。
     if (!createInstance()) return false;
-    SVP_LOGI("vulkan", "instance_created");
+    SVK_LOGI("vulkan", "instance_created");
     if (!createSurface()) return false;
-    SVP_LOGI("vulkan", "surface_created");
+    SVK_LOGI("vulkan", "surface_created");
     // ② 选 GPU 与建逻辑设备：这两步都要查询 surface 的 present 支持，故排在 surface 之后。
     if (!pickPhysicalDevice()) return false;
     if (!createLogicalDevice()) return false;
-    SVP_LOGI("vulkan", "initialize_complete");
+    SVK_LOGI("vulkan", "initialize_complete");
     return true;
 }
 
@@ -136,7 +136,7 @@ void VulkanContext::shutdown() {
 
 bool VulkanContext::createInstance() {
     // 实例创建主要是在探测能力：先选 surface 扩展，加载器支持时再加调试扩展。
-    SVP_LOGI("vulkan", "instance_create_start");
+    SVK_LOGI("vulkan", "instance_create_start");
     // VkApplicationInfo：告诉驱动应用/引擎名称与 API 版本，驱动可据此做兼容性处理与优化。
     VkApplicationInfo appInfo{};
     // sType 是 Vulkan 所有 CreateInfo 结构体的固定首字段模式：标明自身类型，
@@ -172,9 +172,9 @@ bool VulkanContext::createInstance() {
     }
 
     // 校验层是可选的，只在构建配置要求时启用。
-    // 校验层只在构建定义了 SVP_ENABLE_VALIDATION 时才尝试启用，发布版完全不带。
+    // 校验层只在构建定义了 SVK_ENABLE_VALIDATION 时才尝试启用，发布版完全不带。
     std::vector<const char*> layers;
-#ifdef SVP_ENABLE_VALIDATION
+#ifdef SVK_ENABLE_VALIDATION
     // VK_LAYER_KHRONOS_validation 是官方统一校验层，开发期能捕获绝大多数 API 误用。
     layers.push_back("VK_LAYER_KHRONOS_validation");
     // 目标机上可能没装校验层（尤其手机）：探测不到就静默放弃，而不是让初始化失败。
@@ -196,14 +196,14 @@ bool VulkanContext::createInstance() {
     createInfo.enabledLayerCount = static_cast<uint32_t>(layers.size());
     createInfo.ppEnabledLayerNames = layers.data();
 
-    SVP_LOGI("vulkan",
+    SVK_LOGI("vulkan",
              "instance_config extensions={} available_extensions={} validation_layers={} "
              "debug_utils={}",
              extensions.size(), availableExts.size(), layers.size(), useDebugUtils);
 
     // vkCreateInstance 是整个 Vulkan 栈第一个真正干活的调用；失败通常是缺扩展或驱动问题。
     if (vkCreateInstance(&createInfo, nullptr, &instance_) != VK_SUCCESS) {
-        SVP_LOGE("vulkan", "create_instance_failed");
+        SVK_LOGE("vulkan", "create_instance_failed");
         return false;
     }
 
@@ -230,7 +230,7 @@ bool VulkanContext::createInstance() {
             vkGetInstanceProcAddr(instance_, "vkCreateDebugUtilsMessengerEXT"));
         if (func && func(instance_, &debugCreateInfo, nullptr, &debugMessenger_) ==
                         VK_SUCCESS) {
-            SVP_LOGI("vulkan", "debug_messenger_created");
+            SVK_LOGI("vulkan", "debug_messenger_created");
         }
     }
 
@@ -241,9 +241,9 @@ bool VulkanContext::createSurface() {
     // surface 的创建交给平台抽象层处理。
     // 具体怎么建 surface 只有平台知道：Android 包 ANativeWindow，
     // 所以委托给 IPlatform，本文件不含任何平台 API。
-    SVP_LOGI("vulkan", "surface_create_start");
+    SVK_LOGI("vulkan", "surface_create_start");
     if (!platform_->createVulkanSurface(instance_, &surface_)) {
-        SVP_LOGE("vulkan", "surface_create_failed");
+        SVK_LOGE("vulkan", "surface_create_failed");
         return false;
     }
     return true;
@@ -261,7 +261,7 @@ bool VulkanContext::recreateSurface() {
     // 保活恢复：instance/device/队列原样保留，只按新平台窗口重建 surface。
     destroySurface();
     if (!platform_) {
-        SVP_LOGE("vulkan", "recreate_surface_failed reason=no_platform");
+        SVK_LOGE("vulkan", "recreate_surface_failed reason=no_platform");
         return false;
     }
     return createSurface();
@@ -269,16 +269,16 @@ bool VulkanContext::recreateSurface() {
 
 bool VulkanContext::pickPhysicalDevice() {
     // 只保留既能绘制到 surface、又能 present swapchain 图像的设备。
-    SVP_LOGI("vulkan", "physical_device_select_start");
+    SVK_LOGI("vulkan", "physical_device_select_start");
     // 枚举系统里所有支持 Vulkan 的 GPU（独显/核显/软渲染都可能出现）。
     uint32_t count = 0;
     vkEnumeratePhysicalDevices(instance_, &count, nullptr);
     // count 为 0 说明设备上根本没有 Vulkan 驱动，直接失败。
     if (count == 0) {
-        SVP_LOGE("vulkan", "physical_device_not_found reason=no_vulkan_gpu");
+        SVK_LOGE("vulkan", "physical_device_not_found reason=no_vulkan_gpu");
         return false;
     }
-    SVP_LOGI("vulkan", "physical_devices_enumerated count={}", count);
+    SVK_LOGI("vulkan", "physical_devices_enumerated count={}", count);
 
     // 第二次调用取回全部 GPU 句柄。
     std::vector<VkPhysicalDevice> devices(count);
@@ -323,7 +323,7 @@ bool VulkanContext::pickPhysicalDevice() {
             physicalDevice_ = dev;
             VkPhysicalDeviceProperties properties{};
             vkGetPhysicalDeviceProperties(dev, &properties);
-            SVP_LOGI("vulkan",
+            SVK_LOGI("vulkan",
                      "physical_device_selected name={} api={}.{}.{} vendor={} "
                      "graphics_family={} present_family={} device_extensions={}",
                      properties.deviceName, VK_VERSION_MAJOR(properties.apiVersion),
@@ -335,13 +335,13 @@ bool VulkanContext::pickPhysicalDevice() {
     }
 
     // 遍历完所有 GPU 都不满足要求，只能报错放弃。
-    SVP_LOGE("vulkan", "physical_device_not_found reason=no_suitable_gpu");
+    SVK_LOGE("vulkan", "physical_device_not_found reason=no_suitable_gpu");
     return false;
 }
 
 bool VulkanContext::createLogicalDevice() {
     // 创建最小化的逻辑设备，并申请所需的队列族。
-    SVP_LOGI("vulkan", "logical_device_create_start");
+    SVK_LOGI("vulkan", "logical_device_create_start");
     // 与挑选设备时相同的队列族查询，这次针对已选定的 GPU，要拿准确的族索引来建队列。
     uint32_t queueFamilyCount = 0;
     vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice_, &queueFamilyCount, nullptr);
@@ -399,7 +399,7 @@ bool VulkanContext::createLogicalDevice() {
     createInfo.enabledExtensionCount = static_cast<uint32_t>(deviceExtensions.size());
     createInfo.ppEnabledExtensionNames = deviceExtensions.data();
 
-    SVP_LOGI("vulkan",
+    SVK_LOGI("vulkan",
              "logical_device_config queue_families={} graphics_family={} "
              "present_family={} device_extensions={}",
              queueCreateInfos.size(), graphicsFamily, presentFamily,
@@ -408,14 +408,14 @@ bool VulkanContext::createLogicalDevice() {
     // 逻辑设备 vs 物理设备：physical 是硬件本身，logical 是我们与硬件交互的"会话"，
     // 之后几乎所有 Vulkan 调用都以 device_ 为第一个参数。
     if (vkCreateDevice(physicalDevice_, &createInfo, nullptr, &device_) != VK_SUCCESS) {
-        SVP_LOGE("vulkan", "create_device_failed");
+        SVK_LOGE("vulkan", "create_device_failed");
         return false;
     }
 
     // 队列句柄不用"创建"：设备建好后按族索引取出即可（每族只建了 1 条，取 index 0）。
     vkGetDeviceQueue(device_, static_cast<uint32_t>(graphicsFamily), 0, &graphicsQueue_);
     vkGetDeviceQueue(device_, static_cast<uint32_t>(presentFamily), 0, &presentQueue_);
-    SVP_LOGI("vulkan", "logical_device_created queues={}", queueCreateInfos.size());
+    SVK_LOGI("vulkan", "logical_device_created queues={}", queueCreateInfos.size());
     return true;
 }
 
@@ -451,10 +451,10 @@ VkShaderModule VulkanContext::createShaderModule(const uint32_t* code,
     // 这里开销很小：SPIR-V 到 GPU 指令的真正编译发生在管线创建时。
     VkShaderModule module = VK_NULL_HANDLE;
     if (vkCreateShaderModule(device_, &createInfo, nullptr, &module) != VK_SUCCESS) {
-        SVP_LOGE("vulkan", "create_shader_module_failed bytes={}", codeSize);
+        SVK_LOGE("vulkan", "create_shader_module_failed bytes={}", codeSize);
         return VK_NULL_HANDLE;
     }
     return module;
 }
 
-} // namespace svp::gpu
+} // namespace svk::gpu

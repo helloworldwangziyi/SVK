@@ -1,7 +1,7 @@
 #include "app.h"
 #include "triangle.h"
 
-namespace svp {
+namespace svk {
 
 namespace {
 
@@ -19,4 +19,4 @@ std::unique_ptr<IApp> createApp() {
     return std::make_unique<TriangleApp>();
 }
 
-} // namespace svp
+} // namespace svk

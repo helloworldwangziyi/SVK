@@ -2,22 +2,22 @@
 
 /**
  * @file log.h
- * @brief svp 日志封装，底层使用 third_party/spdlog（header-only）。
+ * @brief svk 日志封装，底层使用 third_party/spdlog（header-only）。
  *
  * core 提供便携默认（stdout），也可在平台终端 sink 的基础上追加完整文件 sink：
  * @code{.cpp}
- * svp::log::init("estarx");                                     // stdout（测试/默认）
- * svp::log::init(androidLogger);                                // 仅 Android logcat
- * svp::log::initWithFile(androidLogger, {filesDir + "/logs"});  // logcat + 文件
+ * svk::log::init("estarx");                                     // stdout（测试/默认）
+ * svk::log::init(androidLogger);                                // 仅 Android logcat
+ * svk::log::initWithFile(androidLogger, {filesDir + "/logs"});  // logcat + 文件
  * @endcode
  *
  * 所有项目日志统一输出：
- *   [svp][<feature>][<event> key=value ...]
+ *   [svk][<feature>][<event> key=value ...]
  *
  * 使用方式：
  * @code{.cpp}
- * svp::log::init("estarx");
- * SVP_LOGI("renderer", "initialized width={} height={}", w, h);
+ * svk::log::init("estarx");
+ * SVK_LOGI("renderer", "initialized width={} height={}", w, h);
  * @endcode
  */
 
@@ -37,7 +37,7 @@
 #include <spdlog/sinks/basic_file_sink.h>
 #include <spdlog/sinks/stdout_sinks.h>
 
-namespace svp {
+namespace svk {
 namespace log {
 
 struct LogFileConfig {
@@ -131,7 +131,7 @@ inline void init(const std::shared_ptr<spdlog::logger>& logger) {
     if (!logger) {
         return;
     }
-    // sink/系统日志负责时间、级别、进程与 tag；消息正文严格从 [svp] 开始。
+    // sink/系统日志负责时间、级别、进程与 tag；消息正文严格从 [svk] 开始。
     logger->set_pattern("%v");
     logger->set_level(spdlog::level::debug);
     spdlog::set_default_logger(logger);
@@ -173,7 +173,7 @@ inline bool initWithFile(const std::shared_ptr<spdlog::logger>& terminalLogger,
     }
     if (config.directory.empty()) {
         init(terminalLogger);
-        spdlog::warn("[svp][log][file_sink_disabled reason=no_directory]");
+        spdlog::warn("[svk][log][file_sink_disabled reason=no_directory]");
         return false;
     }
     if (detail::currentLogDirectoryStorage() == config.directory &&
@@ -239,14 +239,14 @@ inline bool initWithFile(const std::shared_ptr<spdlog::logger>& terminalLogger,
         }
         if (config.async) {
             spdlog::info(
-                "[svp][log][async_started queue_size={} threads={} overflow={}]",
+                "[svk][log][async_started queue_size={} threads={} overflow={}]",
                 config.asyncQueueSize, config.asyncThreadCount,
                 detail::overflowPolicyName(config.asyncOverflowPolicy));
         }
         return true;
     } catch (const std::exception& ex) {
         init(terminalLogger);
-        spdlog::warn("[svp][log][file_sink_disabled path={} reason={}]", filePath,
+        spdlog::warn("[svk][log][file_sink_disabled path={} reason={}]", filePath,
                      ex.what());
         return false;
     }
@@ -304,7 +304,7 @@ inline void flush() noexcept {
         }
         const size_t dropped = asyncDroppedCount();
         if (logger && dropped > 0) {
-            spdlog::warn("[svp][log][async_queue_overrun count={}]", dropped);
+            spdlog::warn("[svk][log][async_queue_overrun count={}]", dropped);
             logger->flush();
             resetAsyncDropCounters();
         }
@@ -341,7 +341,7 @@ inline void write(spdlog::level::level_enum level,
     }
     const auto detail = spdlog::fmt_lib::format(
         format, std::forward<Args>(args)...);
-    logger->log(level, "[svp][{}][{}]", feature, detail);
+    logger->log(level, "[svk][{}][{}]", feature, detail);
     if (level >= spdlog::level::err) {
         try {
             logger->flush();
@@ -351,16 +351,16 @@ inline void write(spdlog::level::level_enum level,
 }
 
 } // namespace log
-} // namespace svp
+} // namespace svk
 
 /// 日志宏：第一个参数必须是功能域，后续参数遵循 spdlog 格式串。
-#define SVP_LOGV(feature, ...) \
-    ::svp::log::write(spdlog::level::trace, feature, __VA_ARGS__)
-#define SVP_LOGD(feature, ...) \
-    ::svp::log::write(spdlog::level::debug, feature, __VA_ARGS__)
-#define SVP_LOGI(feature, ...) \
-    ::svp::log::write(spdlog::level::info, feature, __VA_ARGS__)
-#define SVP_LOGW(feature, ...) \
-    ::svp::log::write(spdlog::level::warn, feature, __VA_ARGS__)
-#define SVP_LOGE(feature, ...) \
-    ::svp::log::write(spdlog::level::err, feature, __VA_ARGS__)
+#define SVK_LOGV(feature, ...) \
+    ::svk::log::write(spdlog::level::trace, feature, __VA_ARGS__)
+#define SVK_LOGD(feature, ...) \
+    ::svk::log::write(spdlog::level::debug, feature, __VA_ARGS__)
+#define SVK_LOGI(feature, ...) \
+    ::svk::log::write(spdlog::level::info, feature, __VA_ARGS__)
+#define SVK_LOGW(feature, ...) \
+    ::svk::log::write(spdlog::level::warn, feature, __VA_ARGS__)
+#define SVK_LOGE(feature, ...) \
+    ::svk::log::write(spdlog::level::err, feature, __VA_ARGS__)

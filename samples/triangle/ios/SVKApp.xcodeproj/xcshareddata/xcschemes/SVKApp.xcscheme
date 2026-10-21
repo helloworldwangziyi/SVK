@@ -17,8 +17,8 @@
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "EC0000000000000000000080"
                BuildableName = "Triangle.app"
-               BlueprintName = "SVPApp"
-               ReferencedContainer = "container:SVPApp.xcodeproj">
+               BlueprintName = "SVKApp"
+               ReferencedContainer = "container:SVKApp.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
       </BuildActionEntries>
@@ -46,8 +46,8 @@
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "EC0000000000000000000080"
             BuildableName = "Triangle.app"
-            BlueprintName = "SVPApp"
-            ReferencedContainer = "container:SVPApp.xcodeproj">
+            BlueprintName = "SVKApp"
+            ReferencedContainer = "container:SVKApp.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </LaunchAction>
@@ -63,8 +63,8 @@
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "EC0000000000000000000080"
             BuildableName = "Triangle.app"
-            BlueprintName = "SVPApp"
-            ReferencedContainer = "container:SVPApp.xcodeproj">
+            BlueprintName = "SVKApp"
+            ReferencedContainer = "container:SVKApp.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </ProfileAction>

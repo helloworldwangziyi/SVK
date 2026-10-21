@@ -6,7 +6,7 @@
 
 // VulkanContext：设备 / surface / 平台尺寸查询与显存类型查找。
 #include "gpu/vulkan_context.h"
-// SVP_LOGI/E 日志宏：spdlog 封装，全局统一的日志入口。
+// SVK_LOGI/E 日志宏：spdlog 封装，全局统一的日志入口。
 #include "log.h"
 
 // std::max / std::min / std::swap：交换链尺寸的边界 clamp 与 90/270 宽高互换。
@@ -14,7 +14,7 @@
 // std::vector：承接 Vulkan 枚举惯用法返回的列表。
 #include <vector>
 
-namespace svp::gpu {
+namespace svk::gpu {
 
 Swapchain::Swapchain(VulkanContext& context, bool transparent)
     : transparent_(transparent), context_(context) {}
@@ -22,16 +22,16 @@ Swapchain::Swapchain(VulkanContext& context, bool transparent)
 bool Swapchain::create() {
     // MSAA 采样数只依赖物理设备属性，renderPass/framebuffer 创建前定下来即可；
     // 每次创建重查一次，resize 重建时结果不变。
-    SVP_LOGI("swapchain", "create_start");
+    SVK_LOGI("swapchain", "create_start");
     msaaSamples_ = pickMsaaSampleCount();
-    SVP_LOGI("swapchain", "msaa_selected samples={}", static_cast<int>(msaaSamples_));
+    SVK_LOGI("swapchain", "msaa_selected samples={}", static_cast<int>(msaaSamples_));
     if (!createSwapchain()) return false;
     if (!createImageViews()) return false;
     // MSAA 颜色图尺寸/格式跟随 swapchain，必须在 renderPass（声明采样数）与
     // framebuffer（挂视图）之前创建；失败时内部会降级为单采样，不判失败。
     createColorResources();
     if (!createRenderPass()) return false;
-    SVP_LOGI("swapchain", "create_complete width={} height={} msaa={}",
+    SVK_LOGI("swapchain", "create_complete width={} height={} msaa={}",
              swapchainExtent_.width, swapchainExtent_.height,
              static_cast<int>(msaaSamples_));
     return true;
@@ -71,7 +71,7 @@ bool Swapchain::createSwapchain() {
     const VkPhysicalDevice physicalDevice = context_.physicalDevice();
     const VkDevice device = context_.device();
     const VkSurfaceKHR surface = context_.surface();
-    SVP_LOGI("swapchain", "swapchain_create_start");
+    SVK_LOGI("swapchain", "swapchain_create_start");
 
     // 选择适合当前窗口的 surface 格式、present 模式和尺寸。
     // 三连查询之一：surface 能力（尺寸范围、图像数量范围、当前变换等）。
@@ -94,7 +94,7 @@ bool Swapchain::createSwapchain() {
     if (presentModeCount > 0) {
         vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, surface, &presentModeCount, presentModes.data());
     }
-    SVP_LOGI("swapchain",
+    SVK_LOGI("swapchain",
              "surface_queried formats={} present_modes={} current_extent={}x{} "
              "min_extent={}x{} max_extent={}x{} transform={} images={}..{}",
              formats.size(), presentModes.size(), caps.currentExtent.width,
@@ -183,7 +183,7 @@ bool Swapchain::createSwapchain() {
     // 记录下来：Renderer 录制命令时的投影与裁剪要按它做旋转补偿，
     // 否则折叠屏内屏竖持（currentTransform=ROTATE_90）时画面是横的。
     surfaceTransform_ = caps.currentTransform;
-    SVP_LOGI("swapchain", "configured width={} height={} transform={} present_mode={} msaa={} images={}",
+    SVK_LOGI("swapchain", "configured width={} height={} transform={} present_mode={} msaa={} images={}",
              extent.width, extent.height, static_cast<int>(caps.currentTransform),
              static_cast<int>(presentMode), static_cast<int>(msaaSamples_), imageCount);
     createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
@@ -194,7 +194,7 @@ bool Swapchain::createSwapchain() {
             // Android TextureView supplies premultiplied alpha composition.
             createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR;
         } else {
-            SVP_LOGE("swapchain", "transparent_surface_unsupported reason=composite_alpha");
+            SVK_LOGE("swapchain", "transparent_surface_unsupported reason=composite_alpha");
             return false;
         }
     }
@@ -236,7 +236,7 @@ bool Swapchain::createSwapchain() {
 
     // 创建交换链；失败多为所选参数组合不被驱动支持。
     if (vkCreateSwapchainKHR(device, &createInfo, nullptr, &swapchain_) != VK_SUCCESS) {
-        SVP_LOGE("swapchain", "create_failed");
+        SVK_LOGE("swapchain", "create_failed");
         return false;
     }
 
@@ -248,7 +248,7 @@ bool Swapchain::createSwapchain() {
     // 记住格式与尺寸：后面 renderPass、pipeline、framebuffer、viewport 都要用。
     swapchainImageFormat_ = surfaceFormat.format;
     swapchainExtent_ = extent;
-    SVP_LOGI("swapchain",
+    SVK_LOGI("swapchain",
              "swapchain_created width={} height={} images={} format={} color_space={} "
              "present_mode={} sharing_mode={} composite_alpha={}",
              extent.width, extent.height, swapchainImages_.size(),
@@ -261,7 +261,7 @@ bool Swapchain::createSwapchain() {
 
 bool Swapchain::createImageViews() {
     const VkDevice device = context_.device();
-    SVP_LOGI("swapchain", "image_views_create_start count={}",
+    SVK_LOGI("swapchain", "image_views_create_start count={}",
              swapchainImages_.size());
 
     // 每个 swapchain 图像都要创建一个 2D 颜色视图。
@@ -288,11 +288,11 @@ bool Swapchain::createImageViews() {
         createInfo.subresourceRange.layerCount = 1;
 
         if (vkCreateImageView(device, &createInfo, nullptr, &swapchainImageViews_[i]) != VK_SUCCESS) {
-            SVP_LOGE("swapchain", "create_image_view_failed index={}", i);
+            SVK_LOGE("swapchain", "create_image_view_failed index={}", i);
             return false;
         }
     }
-    SVP_LOGI("swapchain", "image_views_created count={}",
+    SVK_LOGI("swapchain", "image_views_created count={}",
              swapchainImageViews_.size());
     return true;
 }
@@ -318,10 +318,10 @@ bool Swapchain::createColorResources() {
 
     // 单采样 = 未启用 MSAA，renderPass/framebuffer 都走旧的单附件路径。
     if (msaaSamples_ == VK_SAMPLE_COUNT_1_BIT) {
-        SVP_LOGI("swapchain", "msaa_resources_skipped reason=single_sample");
+        SVK_LOGI("swapchain", "msaa_resources_skipped reason=single_sample");
         return true;
     }
-    SVP_LOGI("swapchain", "msaa_resources_create_start samples={} size={}x{}",
+    SVK_LOGI("swapchain", "msaa_resources_create_start samples={} size={}x{}",
              static_cast<int>(msaaSamples_), swapchainExtent_.width,
              swapchainExtent_.height);
 
@@ -347,7 +347,7 @@ bool Swapchain::createColorResources() {
     imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     if (vkCreateImage(device, &imageInfo, nullptr, &msaaColorImage_) != VK_SUCCESS) {
-        SVP_LOGE("swapchain", "create_msaa_image_failed memory=transient");
+        SVK_LOGE("swapchain", "create_msaa_image_failed memory=transient");
         msaaSamples_ = VK_SAMPLE_COUNT_1_BIT;
         return false;
     }
@@ -371,12 +371,12 @@ bool Swapchain::createColorResources() {
         }
     }
     if (memoryType == UINT32_MAX) {
-        SVP_LOGI("swapchain", "msaa_memory_fallback reason=no_lazily_allocated");
+        SVK_LOGI("swapchain", "msaa_memory_fallback reason=no_lazily_allocated");
         vkDestroyImage(device, msaaColorImage_, nullptr);
         msaaColorImage_ = VK_NULL_HANDLE;
         imageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
         if (vkCreateImage(device, &imageInfo, nullptr, &msaaColorImage_) != VK_SUCCESS) {
-            SVP_LOGE("swapchain", "create_msaa_image_failed memory=device_local");
+            SVK_LOGE("swapchain", "create_msaa_image_failed memory=device_local");
             msaaSamples_ = VK_SAMPLE_COUNT_1_BIT;
             return false;
         }
@@ -390,14 +390,14 @@ bool Swapchain::createColorResources() {
     allocInfo.allocationSize = memReq.size;
     allocInfo.memoryTypeIndex = memoryType;
     if (vkAllocateMemory(device, &allocInfo, nullptr, &msaaColorImageMemory_) != VK_SUCCESS) {
-        SVP_LOGE("swapchain", "allocate_msaa_memory_failed");
+        SVK_LOGE("swapchain", "allocate_msaa_memory_failed");
         vkDestroyImage(device, msaaColorImage_, nullptr);
         msaaColorImage_ = VK_NULL_HANDLE;
         msaaSamples_ = VK_SAMPLE_COUNT_1_BIT;
         return false;
     }
     if (vkBindImageMemory(device, msaaColorImage_, msaaColorImageMemory_, 0) != VK_SUCCESS) {
-        SVP_LOGE("swapchain", "bind_msaa_memory_failed");
+        SVK_LOGE("swapchain", "bind_msaa_memory_failed");
         vkFreeMemory(device, msaaColorImageMemory_, nullptr);
         vkDestroyImage(device, msaaColorImage_, nullptr);
         msaaColorImageMemory_ = VK_NULL_HANDLE;
@@ -415,7 +415,7 @@ bool Swapchain::createColorResources() {
     viewInfo.subresourceRange.levelCount = 1;
     viewInfo.subresourceRange.layerCount = 1;
     if (vkCreateImageView(device, &viewInfo, nullptr, &msaaColorImageView_) != VK_SUCCESS) {
-        SVP_LOGE("swapchain", "create_msaa_image_view_failed");
+        SVK_LOGE("swapchain", "create_msaa_image_view_failed");
         vkDestroyImage(device, msaaColorImage_, nullptr);
         vkFreeMemory(device, msaaColorImageMemory_, nullptr);
         msaaColorImage_ = VK_NULL_HANDLE;
@@ -423,14 +423,14 @@ bool Swapchain::createColorResources() {
         msaaSamples_ = VK_SAMPLE_COUNT_1_BIT;
         return false;
     }
-    SVP_LOGI("swapchain", "msaa_resources_created samples={} bytes={} memory_type={}",
+    SVK_LOGI("swapchain", "msaa_resources_created samples={} bytes={} memory_type={}",
              static_cast<int>(msaaSamples_), memReq.size, memoryType);
     return true;
 }
 
 bool Swapchain::createRenderPass() {
     // 附件描述：renderPass 不绑定具体图像，只声明"有一个什么样的附件、怎么用"。
-    SVP_LOGI("swapchain", "render_pass_create_start msaa={}",
+    SVK_LOGI("swapchain", "render_pass_create_start msaa={}",
              static_cast<int>(msaaSamples_));
     //
     // MSAA 开启时附件变成两个，各司其职：
@@ -518,17 +518,17 @@ bool Swapchain::createRenderPass() {
     createInfo.pDependencies = &dependency;
 
     if (vkCreateRenderPass(context_.device(), &createInfo, nullptr, &renderPass_) != VK_SUCCESS) {
-        SVP_LOGE("swapchain", "create_render_pass_failed");
+        SVK_LOGE("swapchain", "create_render_pass_failed");
         return false;
     }
-    SVP_LOGI("swapchain", "render_pass_created attachments={} msaa={}",
+    SVK_LOGI("swapchain", "render_pass_created attachments={} msaa={}",
              createInfo.attachmentCount, static_cast<int>(msaaSamples_));
     return true;
 }
 
 bool Swapchain::createFramebuffers() {
     const VkDevice device = context_.device();
-    SVP_LOGI("swapchain", "framebuffers_create_start count={}",
+    SVK_LOGI("swapchain", "framebuffers_create_start count={}",
              swapchainImageViews_.size());
 
     // 每个 swapchain 图像视图都对应一个 framebuffer。
@@ -553,11 +553,11 @@ bool Swapchain::createFramebuffers() {
         createInfo.layers = 1;
 
         if (vkCreateFramebuffer(device, &createInfo, nullptr, &swapchainFramebuffers_[i]) != VK_SUCCESS) {
-            SVP_LOGE("swapchain", "create_framebuffer_failed index={}", i);
+            SVK_LOGE("swapchain", "create_framebuffer_failed index={}", i);
             return false;
         }
     }
-    SVP_LOGI("swapchain", "framebuffers_created count={} width={} height={} msaa={}",
+    SVK_LOGI("swapchain", "framebuffers_created count={} width={} height={} msaa={}",
              swapchainFramebuffers_.size(), swapchainExtent_.width,
              swapchainExtent_.height, static_cast<int>(msaaSamples_));
     return true;
@@ -607,4 +607,4 @@ void Swapchain::cleanup() {
     }
 }
 
-} // namespace svp::gpu
+} // namespace svk::gpu

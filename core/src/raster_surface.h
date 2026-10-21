@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <memory>
 
-namespace svp {
+namespace svk {
 class IPlatform;
 namespace ui { class Canvas; }
 
@@ -28,4 +28,4 @@ public:
 };
 
 std::unique_ptr<IRasterSurface> createRasterSurface(IPlatform* platform);
-} // namespace svp
+} // namespace svk

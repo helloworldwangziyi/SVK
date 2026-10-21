@@ -88,7 +88,7 @@
 		EC0000000000000000000010 = {
 			isa = PBXGroup;
 			children = (
-				EC0000000000000000000011 /* SVPApp */,
+				EC0000000000000000000011 /* SVKApp */,
 				EC0000000000000000000012 /* platform · ios */,
 				EC0000000000000000000013 /* core */,
 				EC0000000000000000000016 /* App */,
@@ -97,7 +97,7 @@
 			);
 			sourceTree = "<group>";
 		};
-		EC0000000000000000000011 /* SVPApp */ = {
+		EC0000000000000000000011 /* SVKApp */ = {
 			isa = PBXGroup;
 			children = (
 				EC0000000000000000000020 /* main.m */,
@@ -107,7 +107,7 @@
 				EC0000000000000000000024 /* ViewController.mm */,
 				EC0000000000000000000025 /* Info.plist */,
 			);
-			path = SVPApp;
+			path = SVKApp;
 			sourceTree = "<group>";
 		};
 		EC0000000000000000000012 /* platform · ios */ = {
@@ -196,9 +196,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		EC0000000000000000000080 /* SVPApp */ = {
+		EC0000000000000000000080 /* SVKApp */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = EC00000000000000000000B1 /* Build configuration list for PBXNativeTarget "SVPApp" */;
+			buildConfigurationList = EC00000000000000000000B1 /* Build configuration list for PBXNativeTarget "SVKApp" */;
 			buildPhases = (
 				EC0000000000000000000070 /* Embed Shaders (glslc) */,
 				EC0000000000000000000071 /* Sources */,
@@ -209,7 +209,7 @@
 			);
 			dependencies = (
 			);
-			name = SVPApp;
+			name = SVKApp;
 			productName = "Triangle";
 			productReference = EC0000000000000000000040 /* "Triangle.app" */;
 			productType = "com.apple.product-type.application";
@@ -228,7 +228,7 @@
 					};
 				};
 			};
-			buildConfigurationList = EC00000000000000000000B0 /* Build configuration list for PBXProject "SVPApp" */;
+			buildConfigurationList = EC00000000000000000000B0 /* Build configuration list for PBXProject "SVKApp" */;
 			compatibilityVersion = "Xcode 14.0";
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
@@ -241,7 +241,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				EC0000000000000000000080 /* SVPApp */,
+				EC0000000000000000000080 /* SVKApp */,
 			);
 		};
 /* End PBXProject section */
@@ -273,7 +273,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -e\n# Homebrew 不在 Xcode 构建环境的默认 PATH 里，补齐常见安装位置。\nexport PATH=\"/opt/homebrew/bin:/usr/local/bin:$PATH\"\nSVP_ROOT=\"${SRCROOT}/../../..\"\nGLSLC=\"$(command -v glslc || true)\"\nif [ -z \"$GLSLC\" ]; then\n    echo \"error: 未找到 glslc（brew install shaderc，或安装 Vulkan SDK）\" >&2\n    exit 1\nfi\nCMAKE_BIN=\"$(command -v cmake || true)\"\nif [ -z \"$CMAKE_BIN\" ]; then\n    echo \"error: 未找到 cmake（brew install cmake）\" >&2\n    exit 1\nfi\nmkdir -p \"$DERIVED_FILE_DIR/generated\"\n\"$CMAKE_BIN\" \\\n    -DGLSLC_EXECUTABLE=\"$GLSLC\" \\\n    -DSHADER_NAME=ui \\\n    -DVERT_SRC=\"$SVP_ROOT/shaders/ui_vertex.vert\" \\\n    -DFRAG_SRC=\"$SVP_ROOT/shaders/ui_fragment.frag\" \\\n    -DOUTPUT_HEADER=\"$DERIVED_FILE_DIR/generated/assets/ui_shaders.h\" \\\n    -P \"$SVP_ROOT/cmake/embed_shaders.cmake\"\n";
+			shellScript = "set -e\n# Homebrew 不在 Xcode 构建环境的默认 PATH 里，补齐常见安装位置。\nexport PATH=\"/opt/homebrew/bin:/usr/local/bin:$PATH\"\nSVK_ROOT=\"${SRCROOT}/../../..\"\nGLSLC=\"$(command -v glslc || true)\"\nif [ -z \"$GLSLC\" ]; then\n    echo \"error: 未找到 glslc（brew install shaderc，或安装 Vulkan SDK）\" >&2\n    exit 1\nfi\nCMAKE_BIN=\"$(command -v cmake || true)\"\nif [ -z \"$CMAKE_BIN\" ]; then\n    echo \"error: 未找到 cmake（brew install cmake）\" >&2\n    exit 1\nfi\nmkdir -p \"$DERIVED_FILE_DIR/generated\"\n\"$CMAKE_BIN\" \\\n    -DGLSLC_EXECUTABLE=\"$GLSLC\" \\\n    -DSHADER_NAME=ui \\\n    -DVERT_SRC=\"$SVK_ROOT/shaders/ui_vertex.vert\" \\\n    -DFRAG_SRC=\"$SVK_ROOT/shaders/ui_fragment.frag\" \\\n    -DOUTPUT_HEADER=\"$DERIVED_FILE_DIR/generated/assets/ui_shaders.h\" \\\n    -P \"$SVK_ROOT/cmake/embed_shaders.cmake\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -410,7 +410,7 @@
 					"$(SRCROOT)/..",
 					"$(DERIVED_FILE_DIR)/generated",
 				);
-				INFOPLIST_FILE = SVPApp/Info.plist;
+				INFOPLIST_FILE = SVKApp/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -444,7 +444,7 @@
 					"$(SRCROOT)/..",
 					"$(DERIVED_FILE_DIR)/generated",
 				);
-				INFOPLIST_FILE = SVPApp/Info.plist;
+				INFOPLIST_FILE = SVKApp/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -464,7 +464,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		EC00000000000000000000B0 /* Build configuration list for PBXProject "SVPApp" */ = {
+		EC00000000000000000000B0 /* Build configuration list for PBXProject "SVKApp" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				EC00000000000000000000A0 /* Debug */,
@@ -473,7 +473,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		EC00000000000000000000B1 /* Build configuration list for PBXNativeTarget "SVPApp" */ = {
+		EC00000000000000000000B1 /* Build configuration list for PBXNativeTarget "SVKApp" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				EC00000000000000000000A2 /* Debug */,
