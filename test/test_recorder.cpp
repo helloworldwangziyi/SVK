@@ -5,14 +5,18 @@
  * 运行：./build/host/test/test_recorder，或 cd build/host && ctest -R test_recorder
  */
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <string>
 #include <thread>
 
+#include "recorder/binary_reader.h"
 #include "recorder/binary_recorder.h"
 
 static int g_failures = 0;
@@ -160,10 +164,124 @@ static void test_prune_on_start() {
     std::printf("--- recorder：启动清理校验完成 ---\n");
 }
 
+// roundtrip：写 300 条交替 type 的 tick，读回校验数量、seq 完整性、
+// 类型过滤、CSV 导出行数、损坏尾部容错。
+static void test_reader_roundtrip() {
+    const std::string dir = (fs::temp_directory_path() / "svk_test_reader").string();
+    fs::remove_all(dir);
+
+    svk::recorder::BinaryRecorder recorder;
+    svk::recorder::BinaryRecorder::Config config;
+    config.directory = dir;
+    config.filePrefix = "quotes";
+    config.sessionId = "reader-test";
+    config.tradingDay = 20261021;
+    config.flushBytes = 256;
+    config.flushIntervalMs = 20;
+    config.maxFileBytes = 2 * 1024;
+    CHECK_TRUE(recorder.start(config));
+
+    constexpr int kCount = 300;
+    for (int i = 0; i < kCount; ++i) {
+        const Tick tick = makeTick(i);
+        recorder.write(i % 2 == 0 ? 1 : 2, tick);
+    }
+    recorder.flush();
+    recorder.stop();
+
+    const auto files =
+        svk::recorder::BinaryReader::listFiles(dir, ".qlog");
+    CHECK_TRUE(files.size() >= 2);
+
+    // 全量读回：条数、payload 完整、文件头字段正确。
+    std::vector<uint64_t> seqs;
+    for (const auto& path : files) {
+        svk::recorder::FileHeaderView header;
+        const int64_t n = svk::recorder::BinaryReader::readFile(
+            path, {},
+            [&](const svk::recorder::RecordView& rec) {
+                CHECK_TRUE(rec.payloadBytes == sizeof(Tick));
+                Tick tick{};
+                std::memcpy(&tick, rec.payload, sizeof(Tick));
+                seqs.push_back(tick.seq);
+                return true;
+            },
+            &header);
+        CHECK_TRUE(n > 0);
+        CHECK_TRUE(header.magic == 0x53564B51);
+        CHECK_TRUE(header.tradingDay == 20261021);
+    }
+    CHECK_TRUE(seqs.size() == static_cast<size_t>(kCount));
+    std::sort(seqs.begin(), seqs.end());
+    for (size_t i = 0; i < seqs.size(); ++i) {
+        CHECK_TRUE(seqs[i] == i);
+    }
+
+    // 类型过滤：type=2 恰好 150 条，且 seq 都是奇数。
+    svk::recorder::RecordFilter typeFilter;
+    typeFilter.types = {2};
+    int type2Count = 0;
+    for (const auto& path : files) {
+        svk::recorder::BinaryReader::readFile(
+            path, typeFilter,
+            [&](const svk::recorder::RecordView& rec) {
+                Tick tick{};
+                std::memcpy(&tick, rec.payload, sizeof(Tick));
+                CHECK_TRUE(tick.seq % 2 == 1);
+                ++type2Count;
+                return true;
+            });
+    }
+    CHECK_TRUE(type2Count == kCount / 2);
+
+    // CSV 导出：行数 = 该文件记录数 + 表头。
+    const int64_t fileRecords = svk::recorder::BinaryReader::readFile(
+        files.front(), {}, [](const svk::recorder::RecordView&) {
+            return true;
+        });
+    const std::string csvPath = dir + "/export.csv";
+    CHECK_TRUE(svk::recorder::BinaryReader::exportCsv(
+        files.front(), {}, csvPath,
+        [](const svk::recorder::RecordView& rec) {
+            Tick tick{};
+            std::memcpy(&tick, rec.payload, sizeof(Tick));
+            return std::to_string(tick.seq) + "," +
+                   std::to_string(tick.price);
+        }));
+    std::ifstream csvIn(csvPath);
+    const std::string csvContent((std::istreambuf_iterator<char>(csvIn)),
+                                 std::istreambuf_iterator<char>());
+    const auto lineCount = static_cast<int64_t>(
+        std::count(csvContent.begin(), csvContent.end(), '\n'));
+    CHECK_TRUE(lineCount == fileRecords + 1);
+
+    // 损坏尾部：复制一个文件并追加 10 字节残帧，读回完整记录并报告残留。
+    const std::string corruptPath = dir + "/corrupt.qlog";
+    fs::copy_file(files.back(), corruptPath);
+    {
+        std::ofstream out(corruptPath, std::ios::binary | std::ios::app);
+        out << "partial-fr";
+    }
+    uint64_t corrupted = 0;
+    const int64_t beforeCorrupt = svk::recorder::BinaryReader::readFile(
+        files.back(), {},
+        [](const svk::recorder::RecordView&) { return true; });
+    const int64_t afterCorrupt = svk::recorder::BinaryReader::readFile(
+        corruptPath, {},
+        [](const svk::recorder::RecordView&) { return true; }, nullptr,
+        &corrupted);
+    CHECK_TRUE(afterCorrupt == beforeCorrupt);
+    CHECK_TRUE(corrupted == 10);
+
+    fs::remove_all(dir);
+    std::printf("--- reader：roundtrip / 过滤 / 导出 / 容错校验完成 ---\n");
+}
+
 int main() {
     test_write_and_rotation();
     test_buffer_overflow_drops();
     test_prune_on_start();
+    test_reader_roundtrip();
 
     if (g_failures > 0) {
         std::printf("\n%d 项 CHECK 失败\n", g_failures);
