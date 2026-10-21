@@ -35,8 +35,10 @@
 #include <cctype>
 #include <csignal>
 #include <cstddef>
+#include <cstdint>
 #include <ctime>
 #include <filesystem>
+#include <fstream>
 #include <iomanip>
 #include <memory>
 #include <mutex>
@@ -52,6 +54,8 @@
 #include <spdlog/sinks/basic_file_sink.h>
 #include <spdlog/sinks/rotating_file_sink.h>
 #include <spdlog/sinks/stdout_sinks.h>
+
+#include "log_crypto.h"
 
 namespace svk {
 namespace log {
@@ -81,6 +85,9 @@ struct LogFileConfig {
     // 会话信息：由平台壳填入（App 版本、机型、系统版本等），随 session_started
     // 写入主通道与审计通道文件头。
     std::string sessionInfo;
+    // 落盘加密：64 个十六进制字符（32 字节 ChaCha20 密钥）。为空不加密。
+    // 开启后文件 sink 不做轮转（见 log_crypto.h 头部注释）。
+    std::string fileEncryptionKeyHex;
 };
 
 /** 日志通道：引擎/业务共用默认 logger（可丢）；审计独立文件、同步直写（不丢）。 */
@@ -263,6 +270,22 @@ inline void pruneLogDirectory(const std::string& directory,
     }
 }
 
+/**
+ * 按配置创建文件 sink：配置了 fileEncryptionKeyHex 且密钥合法时用加密 sink
+ * （不轮转）；否则用轮转 sink。
+ */
+inline spdlog::sink_ptr makeFileSink(const std::string& path,
+                                     const LogFileConfig& config) {
+    if (!config.fileEncryptionKeyHex.empty()) {
+        uint8_t key[32];
+        if (hexToKey(config.fileEncryptionKeyHex, key)) {
+            return std::make_shared<EncryptingFileSink>(path, key);
+        }
+    }
+    return std::make_shared<spdlog::sinks::rotating_file_sink_mt>(
+        path, config.maxFileSizeBytes, config.maxRotatedFiles);
+}
+
 /** 调用点级限速状态：每个 THROTTLE 宏展开在调用点自带一份 static。 */
 struct ThrottleState {
     std::atomic<int64_t> lastPassMs{0};
@@ -324,14 +347,93 @@ inline bool throttleKeyTryPass(const std::string& key,
     return true;
 }
 
-/** 已格式化正文的统一出口：级别拦截、三段式前缀、Error 同步 flush。 */
+/** 敏感 key 清单（小写）：命中的 key=value 在写出前就地掩码。 */
+inline std::vector<std::string>& sensitiveKeysStorage() {
+    static std::vector<std::string> keys = {
+        "phone", "mobile", "idcard", "id_card", "token",
+        "password", "secret", "account", "bankcard",
+    };
+    return keys;
+}
+
+inline bool& maskingEnabledStorage() {
+    static bool value = true;
+    return value;
+}
+
+inline bool keyIsSensitive(const char* key, size_t keyLen) {
+    char lower[64];
+    if (keyLen >= sizeof(lower)) {
+        return false;
+    }
+    for (size_t i = 0; i < keyLen; ++i) {
+        lower[i] = static_cast<char>(
+            std::tolower(static_cast<unsigned char>(key[i])));
+    }
+    for (const auto& sensitive : sensitiveKeysStorage()) {
+        const size_t kLen = sensitive.size();
+        // 精确命中，或 "_token" 式后缀命中（如 access_token）。
+        const bool exact =
+            keyLen == kLen && std::memcmp(lower, sensitive.data(), kLen) == 0;
+        const bool suffix = keyLen > kLen && lower[keyLen - kLen - 1] == '_' &&
+                            std::memcmp(lower + keyLen - kLen,
+                                        sensitive.data(), kLen) == 0;
+        if (exact || suffix) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/** 就地掩码 value：len<=4 全掩；5~7 留首尾各 1；>=8 留前 3 后 2。 */
+inline void maskRange(std::string& text, size_t from, size_t to) {
+    const size_t len = to - from;
+    if (len == 0) {
+        return;
+    }
+    size_t keepHead = 0;
+    size_t keepTail = 0;
+    if (len >= 8) {
+        keepHead = 3;
+        keepTail = 2;
+    } else if (len >= 5) {
+        keepHead = 1;
+        keepTail = 1;
+    }
+    for (size_t i = from + keepHead; i < to - keepTail; ++i) {
+        text[i] = '*';
+    }
+}
+
+/** 扫描正文中的 key=value 片段，命中敏感清单即就地掩码（无分配）。 */
+inline void maskSensitiveInPlace(std::string& detail) {
+    if (!maskingEnabledStorage()) {
+        return;
+    }
+    const size_t n = detail.size();
+    size_t pos = 0;
+    while (pos < n) {
+        size_t end = detail.find(' ', pos);
+        if (end == std::string::npos) {
+            end = n;
+        }
+        const size_t eq = detail.find('=', pos);
+        if (eq < end && keyIsSensitive(detail.data() + pos, eq - pos)) {
+            maskRange(detail, eq + 1, end);
+        }
+        pos = end + 1;
+    }
+}
+
+/** 已格式化正文的统一出口：级别拦截、敏感字段掩码、三段式前缀、Error 同步 flush。 */
 inline void writeFormatted(spdlog::logger* logger,
                            spdlog::level::level_enum level,
                            spdlog::string_view_t feature,
-                           const std::string& detail) {
+                           std::string detail) {
     if (!logger || !logger->should_log(level)) {
         return;
     }
+    maskSensitiveInPlace(detail);
     logger->log(level, "[svk][{}][{}]", feature, detail);
     if (level >= spdlog::level::err) {
         try {
@@ -454,8 +556,7 @@ inline bool initWithFile(const std::shared_ptr<spdlog::logger>& terminalLogger,
     const std::string filePath =
         detail::makeLogFilePath(config, config.filePrefix);
     try {
-        auto fileSink = std::make_shared<spdlog::sinks::rotating_file_sink_mt>(
-            filePath, config.maxFileSizeBytes, config.maxRotatedFiles);
+        auto fileSink = detail::makeFileSink(filePath, config);
         fileSink->set_pattern("%Y-%m-%d %H:%M:%S.%e [%l] [thread %t] %v");
         fileSink->set_level(config.fileLevel);
         sinks.push_back(fileSink);
@@ -492,9 +593,7 @@ inline bool initWithFile(const std::shared_ptr<spdlog::logger>& terminalLogger,
         // 终端 sink 与主通道共享，保证 logcat/控制台同样可见。
         const std::string auditFilePath =
             detail::makeLogFilePath(config, config.auditFilePrefix);
-        auto auditFileSink =
-            std::make_shared<spdlog::sinks::rotating_file_sink_mt>(
-                auditFilePath, config.maxFileSizeBytes, config.maxRotatedFiles);
+        auto auditFileSink = detail::makeFileSink(auditFilePath, config);
         auditFileSink->set_pattern("%Y-%m-%d %H:%M:%S.%e [%l] [thread %t] %v");
         auditFileSink->set_level(config.fileLevel);
         std::vector<spdlog::sink_ptr> auditSinks;
@@ -610,6 +709,105 @@ inline void setLevel(spdlog::level::level_enum level) {
 /** @brief 只调整文件级别，终端保持不变。 */
 inline void setFileLevel(spdlog::level::level_enum level) {
     setLevels(detail::currentTerminalLevelStorage(), level);
+}
+
+/** @brief 覆盖敏感 key 清单（小写，支持 "_key" 后缀命中）；默认见实现。 */
+inline void setSensitiveKeys(std::vector<std::string> keys) {
+    detail::sensitiveKeysStorage() = std::move(keys);
+}
+
+/** @brief 开关敏感字段掩码（默认开）。 */
+inline void setMaskingEnabled(bool enabled) {
+    detail::maskingEnabledStorage() = enabled;
+}
+
+/** 日志归集选项：按修改时间窗把日志文件复制到目标目录，附 manifest。 */
+struct LogCollectOptions {
+    std::string directory;
+    int64_t mtimeFromMs = 0;             // 闭区间起点（epoch 毫秒）
+    int64_t mtimeToMs = INT64_MAX;       // 闭区间终点
+    std::string destDir;
+    std::string manifestNote;            // 业务附注（用户 id、反馈单号等）
+};
+
+/**
+ * @brief 归集日志文件到 destDir 并写 manifest.txt（时间、session、文件清单）。
+ * 压缩与上传由平台/业务层完成（各端均有系统压缩 API）。返回归集的文件数。
+ */
+inline size_t collectLogFiles(const LogCollectOptions& options,
+                              std::string* err = nullptr) {
+    namespace fs = std::filesystem;
+    if (err) {
+        err->clear();
+    }
+    std::error_code ec;
+    if (options.directory.empty() || options.destDir.empty() ||
+        !fs::is_directory(options.directory, ec)) {
+        if (err) {
+            *err = "invalid_directory";
+        }
+        return 0;
+    }
+    fs::create_directories(options.destDir, ec);
+    if (ec) {
+        if (err) {
+            *err = "dest_not_writable";
+        }
+        return 0;
+    }
+
+    // file_time_type 的 epoch 不保证是系统时钟，用两次"现在"对齐换算。
+    const auto nowFile = fs::file_time_type::clock::now();
+    const auto nowSysMs =
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch())
+            .count();
+
+    struct Collected {
+        std::string name;
+        uint64_t size;
+    };
+    std::vector<Collected> collected;
+    uint64_t totalBytes = 0;
+    for (const auto& entry : fs::directory_iterator(options.directory, ec)) {
+        if (!entry.is_regular_file(ec) || entry.path().extension() != ".log") {
+            continue;
+        }
+        std::error_code mtimeEc;
+        const auto ftime = fs::last_write_time(entry.path(), mtimeEc);
+        if (mtimeEc) {
+            continue;
+        }
+        const int64_t mtimeMs =
+            std::chrono::duration_cast<std::chrono::milliseconds>(ftime -
+                                                                  nowFile)
+                .count() +
+            nowSysMs;
+        if (mtimeMs < options.mtimeFromMs || mtimeMs > options.mtimeToMs) {
+            continue;
+        }
+        const auto dest =
+            fs::path(options.destDir) / entry.path().filename();
+        if (!fs::copy_file(entry.path(), dest,
+                           fs::copy_options::overwrite_existing, ec)) {
+            continue;
+        }
+        const uint64_t size = entry.file_size(ec);
+        collected.push_back({entry.path().filename().string(), size});
+        totalBytes += size;
+    }
+
+    std::ofstream manifest(fs::path(options.destDir) / "manifest.txt",
+                           std::ios::trunc);
+    manifest << "generated_at_ms=" << nowSysMs << "\n"
+             << "session_id=" << currentSessionId() << "\n"
+             << "note=" << options.manifestNote << "\n"
+             << "files=" << collected.size() << " total_bytes=" << totalBytes
+             << "\n";
+    for (const auto& item : collected) {
+        manifest << item.name << " " << item.size << "\n";
+    }
+    return collected.size();
 }
 
 inline size_t asyncQueuedCount() {
@@ -801,7 +999,7 @@ inline void writeThrottled(detail::ThrottleState& state,
     if (suppressed > 0) {
         detail += " suppressed=" + std::to_string(suppressed);
     }
-    detail::writeFormatted(logger, level, feature, detail);
+    detail::writeFormatted(logger, level, feature, std::move(detail));
 }
 
 /**
@@ -829,7 +1027,7 @@ inline void writeThrottledKey(spdlog::string_view_t key,
     if (suppressed > 0) {
         detail += " suppressed=" + std::to_string(suppressed);
     }
-    detail::writeFormatted(logger, level, feature, detail);
+    detail::writeFormatted(logger, level, feature, std::move(detail));
 }
 
 } // namespace log

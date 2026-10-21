@@ -163,5 +163,5 @@ quotes/<trading_day>/<prefix>-HHMMSS.qlog
 | ⑤ | QuoteRecorder 写路径：有界缓冲 + 后台落盘 + 四层防线（`core/src/recorder/binary_recorder.h`） | 已完成 |
 | ⑥ | QuoteReader：过滤、导出、回放（`core/src/recorder/binary_reader.h`） | 已完成 |
 | ⑦ | 崩溃保全：signal handler flush（`installCrashHandler`）+ recorder mmap 落盘 | 已完成 |
-| ⑧ | 合规：脱敏、落盘加密、回捞上传 | 未开始 |
+| ⑧ | 合规：脱敏（key=value 掩码）、落盘加密（ChaCha20，混淆级）、归集（manifest，压缩上传留平台层） | 已完成 |
 | ⑨ | 帧号关联、SVK_TRACE_SCOPE 平台追踪 | 未开始 |

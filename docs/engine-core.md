@@ -8,17 +8,18 @@
 
 ## 1. 当前定位
 
-当前引擎是一个 **C++17、Vulkan、立即模式 2D 几何渲染核心**，构建为静态库 `svk_core`。
+当前引擎是一个 **C++17、多后端（Vulkan + Metal）RHI 的立即模式 2D 几何渲染核心**，构建为静态库 `svk_core`。
 
 它已经具备：
 
 - App 与平台宿主之间的公共接口。
-- Vulkan instance、surface、设备、队列和交换链创建。
+- 多后端 RHI：同一套编排层下按装配点装配 Vulkan（Android/鸿蒙/host）或 Metal（iOS）后端。
+- 以 Vulkan 后端为例：instance、surface、设备、队列和交换链创建；Metal 后端对应 `MTLDevice`、`CAMetalLayer` drawable 与命令队列。
 - 双帧在飞的命令提交与同步。
 - 三角形和矩形的 CPU 顶点收集、按裁剪区域合批。
 - 顶点色 × 纹理的统一着色，以及 1×1 白纹理。
 - 透明混合、动态 viewport/scissor、MSAA。
-- 尺寸变化、旋转补偿、交换链重建与有限次重试。
+- 尺寸变化、交换资源重建与有限次重试（旋转补偿仅 Vulkan 后端需要，Metal 无此概念）。
 - Surface 挂起和恢复。
 - 基于 spdlog 的统一日志宏和平台 sink 注入。
 
@@ -35,17 +36,23 @@
 | 文件 | 当前职责 |
 |---|---|
 | `core/src/app.h` | `IApp`、`AppFrameContext`、`createApp()`，连接 App 业务与宿主 |
-| `core/src/render_platform.h` | `IPlatform`，抽象原生 Surface 和平台所需 Vulkan 扩展 |
-| `core/src/raster_surface.h` | `IRasterSurface`，隐藏 Vulkan 渲染器实现 |
-| `core/src/vulkan_renderer.h/.cpp` | 初始化、资源编排、帧提交、重建、挂起恢复、顶点和同步设施 |
-| `core/src/gpu/vulkan_context.h/.cpp` | VkInstance、VkSurfaceKHR、物理/逻辑设备、队列和调试回调 |
-| `core/src/gpu/swapchain.h/.cpp` | Swapchain、ImageView、MSAA、RenderPass、Framebuffer 和尺寸状态 |
-| `core/src/gpu/ui_pipeline.h/.cpp` | 唯一一条 UI GraphicsPipeline 及其 Layout |
-| `core/src/gpu/texture_cache.h/.cpp` | 采样器、Descriptor 和 1×1 白纹理；目前不是通用纹理缓存 |
+| `core/src/render_platform.h` | `IPlatform`，抽象原生窗口句柄与绘制区尺寸，不暴露图形 API 类型 |
+| `core/src/raster_surface.h` | `IRasterSurface`，隐藏具体 GPU 后端实现 |
+| `core/src/renderer.h/.cpp` | 渲染编排层：装配后端、生命周期编排、帧重试语义与日志 |
+| `core/src/gpu/rhi.h` | `gpu::IGpuBackend` 后端接口、`BackendType` 与 `createBackend()` 装配点 |
+| `core/src/gpu/backend_factory.cpp` | `toString(BackendType)` 与按编译目标装配后端 |
+| `core/src/gpu/vulkan/vulkan_context.h/.cpp` | VkInstance、VkSurfaceKHR、物理/逻辑设备、队列和调试回调 |
+| `core/src/gpu/vulkan/swapchain.h/.cpp` | Swapchain、ImageView、MSAA、RenderPass、Framebuffer 和尺寸状态 |
+| `core/src/gpu/vulkan/ui_pipeline.h/.cpp` | 唯一一条 UI GraphicsPipeline 及其 Layout |
+| `core/src/gpu/vulkan/texture_cache.h/.cpp` | 采样器、Descriptor 和 1×1 白纹理；目前不是通用纹理缓存 |
+| `core/src/gpu/vulkan/vulkan_backend.h/.cpp` | Vulkan 后端：一帧的完整执行（acquire → 录制 → 提交 → present）及命令池/顶点缓冲/同步设施 |
+| `core/src/gpu/metal/metal_backend.{h,mm}` | iOS Metal 后端（pimpl，ObjC 全在 `.mm`）：drawable 获取、编码、present |
+| `core/src/gpu/metal/metal_backend_factory.h` | Metal 后端装配契约头（`createMetalBackend()`） |
+| `core/src/gpu/metal/metal_shaders.h` | 内嵌 MSL 着色器源字符串，运行时编译 |
 | `core/src/ui/canvas.h/.cpp` | CPU 侧顶点流和 Batch 收集，支持三角形、矩形 |
 | `core/src/log.h` | spdlog 初始化、统一消息前缀和 `SVK_LOG*` 宏 |
-| `shaders/ui_vertex.vert` | 像素坐标经 MVP 转到 NDC，传递颜色和 UV |
-| `shaders/ui_fragment.frag` | 输出 `顶点色 × 纹理采样` |
+| `shaders/ui_vertex.vert` | 像素坐标经 MVP 转到 NDC，传递颜色和 UV（Vulkan 后端） |
+| `shaders/ui_fragment.frag` | 输出 `顶点色 × 纹理采样`（Vulkan 后端） |
 | `CMakeLists.txt` | 定义 `svk_core`、依赖和 Shader 构建 |
 | `cmake/embed_shaders.cmake` | GLSL → SPIR-V → C++ `uint32_t` 数组 |
 
@@ -60,14 +67,19 @@ platform 宿主
 App（samples/<app>/）
   └─ IApp.onFrame(...) 向 ui::Canvas 写入本帧几何
 
-Renderer
-  ├─ VulkanContext context_
-  ├─ TextureCache textureCache_
-  ├─ Swapchain swapchain_
-  ├─ UiPipeline uiPipeline_
-  ├─ CommandPool / CommandBuffers
-  ├─ 双帧 Semaphore / Fence
-  └─ 双帧动态 VertexBuffer
+Renderer（编排层）
+  ├─ IPlatform* platform_
+  └─ unique_ptr<gpu::IGpuBackend> backend_（gpu::createBackend() 装配）
+       ├─ Vulkan 后端（gpu/vulkan/，Android/鸿蒙/host）
+       │   ├─ VulkanContext context_
+       │   ├─ TextureCache textureCache_
+       │   ├─ Swapchain swapchain_
+       │   ├─ UiPipeline uiPipeline_
+       │   ├─ CommandPool / CommandBuffers
+       │   ├─ 双帧 Semaphore / Fence
+       │   └─ 双帧动态 VertexBuffer
+       └─ Metal 后端（gpu/metal/，iOS；.mm 内 Impl 持有 MTLDevice、
+           CAMetalLayer drawable、命令队列、MSAA 纹理与双帧信号量）
 ```
 
 依赖原则：
@@ -76,7 +88,7 @@ Renderer
 - 平台桥接层只依赖 `IApp`、`IPlatform`、`IRasterSurface` 和 `Canvas`。
 - `Renderer` 不直接调用 Android、iOS 或鸿蒙 API。
 - `IPlatform` 是由平台实现、被引擎非拥有引用的指针；恢复 Surface 时可以替换。
-- GPU 子模块以值成员方式由 `Renderer` 持有，声明顺序保证 `VulkanContext` 最先构造。
+- GPU 设施由各后端实现持有（Vulkan 后端以值成员持有子模块，声明顺序保证 `VulkanContext` 最先构造）。
 
 ## 4. 三个公共边界
 
@@ -103,17 +115,10 @@ public:
 
 必须实现：
 
-- `getSurfaceExtensionName()`：平台 Surface 扩展。
-- `createVulkanSurface()`：从原生窗口创建 `VkSurfaceKHR`。
+- `nativeWindowHandle()`：返回后端无关的原生窗口句柄（`void*`）——Android 为 `ANativeWindow*`，iOS 为 `CAMetalLayer*`，鸿蒙为 `OHNativeWindow*`，由当前编译的后端自行解释。
 - `getSurfaceSize()`：返回像素尺寸。
 
-可选钩子：
-
-- `getInstanceCreateFlags()`。
-- `getRequiredInstanceExtensions()`。
-- `getRequiredDeviceExtensions()`。
-
-这些可选钩子目前主要服务 iOS MoltenVK 的 portability 要求。
+接口刻意不暴露任何图形 API 类型。多后端拆分后，本接口不再承担 surface 创建职责：Vulkan 后端在 `VulkanContext` 内按 `VK_USE_PLATFORM_ANDROID_KHR` / `VK_USE_PLATFORM_OHOS` 宏分发 `vkCreateAndroidSurfaceKHR` / `vkCreateSurfaceOHOS`；Metal 后端直接消费 `CAMetalLayer`。
 
 ### 4.3 `IRasterSurface`：渲染后端边界
 
@@ -125,7 +130,7 @@ public:
 - `suspendSurface()`。
 - `resumeSurface()`。
 
-`createRasterSurface()` 当前固定返回 Vulkan `Renderer`。`RenderResult` 的含义：
+`createRasterSurface()` 返回渲染编排层 `Renderer`；具体后端在装配点 `gpu::createBackend()` 按编译目标选择——iOS 工程定义 `SVK_METAL_BACKEND` 时装配 Metal，其余目标装配 Vulkan。`RenderResult` 的含义：
 
 | 结果 | 当前含义 |
 |---|---|
@@ -135,19 +140,21 @@ public:
 
 ## 5. 初始化、资源所有权与销毁
 
+> 以下以 Vulkan 后端为例，Metal 后端的差异见 7.6。
+
 ### 5.1 初始化顺序
 
-`Renderer::initialize()` 严格按依赖关系执行：
+`Renderer::initialize()` 只做编排：经装配点创建后端 → 设备级资源 → surface 级资源。任何一步失败都返回 `false`，由平台桥接层销毁 Renderer 并清理平台对象。
 
-1. `VulkanContext.initialize()`：instance → surface → 物理设备 → 逻辑设备。
+以 Vulkan 后端为例，初始化内部严格按依赖关系执行：
+
+1. `VulkanContext.initialize()`：instance → surface → 物理设备 → 逻辑设备（surface 先于设备选取创建，因为 present 支持查询依赖 surface）。
 2. `TextureCache.initialize()`：先建立 Descriptor 布局和白纹理。
-3. `Swapchain.create()`：swapchain → image view → MSAA → render pass。
-4. `UiPipeline.create()`：依赖 render pass、采样数和 Descriptor 布局。
-5. `Swapchain.createFramebuffers()`。
-6. 创建命令池、双帧顶点缓冲、命令缓冲和同步对象。
+3. 创建命令池、双帧顶点缓冲、命令缓冲和同步对象（与 swapchain 尺寸无关的执行设施）。
+4. `VulkanBackend.createSurface()`：swapchain → image view → MSAA → render pass。
+5. `UiPipeline.create()`：依赖 render pass、采样数和 Descriptor 布局。
+6. `Swapchain.createFramebuffers()`。
 7. 清除初始化阶段多余的重建标记。
-
-任何一步失败都返回 `false`，由平台桥接层销毁 Renderer 并清理平台对象。
 
 ### 5.2 资源归属
 
@@ -157,14 +164,14 @@ public:
 | `TextureCache` | Sampler、DescriptorPool/Layout、白纹理 Image/Memory/View；DescriptorSet 随池释放 |
 | `Swapchain` | Swapchain、ImageViews、Framebuffers、RenderPass、MSAA Image/Memory/View |
 | `UiPipeline` | Pipeline 和 PipelineLayout |
-| `Renderer` | 上述模块，以及 CommandPool、同步对象和动态顶点缓冲 |
+| `VulkanBackend` | 上述 gpu/vulkan 模块，以及 CommandPool、同步对象和动态顶点缓冲 |
 | `Canvas` | 纯 CPU 的 `vertices_` 和 `batches_`，不持有 GPU 资源 |
 
 Swapchain 图像本体由 Swapchain 管理，代码销毁的是 ImageView，不会单独 `vkDestroyImage` 这些呈现图像。
 
 ### 5.3 销毁顺序
 
-`Renderer::shutdown()`：
+编排层的析构只兜底释放后端；真正的销毁在 `VulkanBackend::shutdownDevice()`：
 
 1. `vkDeviceWaitIdle()`，等待在飞工作结束。
 2. 销毁 Fence、Semaphore 和顶点缓冲。
@@ -173,7 +180,7 @@ Swapchain 图像本体由 Swapchain 管理，代码销毁的是 ImageView，不�
 5. `VulkanContext.shutdown()`：Device → DebugMessenger → Surface → Instance。
 6. 清空句柄容器。
 
-主要模块的清理函数都按幂等目标编写，析构函数会再次调用 `shutdown()` 作为兜底。
+主要模块的清理函数都按幂等目标编写，后端析构函数会再次调用 `shutdownDevice()` 作为兜底。
 
 ## 6. 每帧执行流程
 
@@ -189,9 +196,11 @@ Swapchain 图像本体由 Swapchain 管理，代码销毁的是 ImageView，不�
 
 两个初始顶点缓冲各占 256 KiB，不含后续扩容。
 
+以上常量三端一致：Metal 后端取相同数值（帧槽等待用信号量代替 Fence，超时同为 16ms）。
+
 ### 6.2 `render()` 主流程
 
-每次调用最多执行三轮，以处理 Surface 正在变化的情况：
+`Renderer::render()` 直接委托 `backend_->renderFrame()`；以下以 Vulkan 后端为例，每次调用最多执行三轮，以处理 Surface 正在变化的情况：
 
 1. 检查并消费 Swapchain 重建标记，必要时先等待设备空闲并重建。
 2. 比较平台请求的视觉尺寸与 Swapchain 实际尺寸，不匹配则继续重建。
@@ -243,7 +252,7 @@ Fence 只在确定会提交前 Reset，避免提前 Reset 后中途返回导致�
 
 ### 7.2 `VulkanContext`
 
-- 创建 Instance 时加入通用 Surface 扩展和 `IPlatform` 提供的平台扩展。
+- 创建 Instance 时加入通用 Surface 扩展（`VK_KHR_surface`），再按编译目标补充平台扩展（Android 的 `VK_KHR_android_surface`、鸿蒙的 `VK_OHOS_surface`）；surface 创建收进 core，按 `VK_USE_PLATFORM_ANDROID_KHR` / `VK_USE_PLATFORM_OHOS` 宏分发，不再经 `IPlatform`。
 - 可选启用 `VK_EXT_debug_utils`。
 - 只有定义 `SVK_ENABLE_VALIDATION` 且系统存在 `VK_LAYER_KHRONOS_validation` 时才启用校验层。
 - 校验回调只订阅 Warning/Error，并转发到 `SVK_LOG*`。
@@ -260,7 +269,7 @@ Fence 只在确定会提交前 Reset，避免提前 Reset 后中途返回导致�
 - 图像数量通常为 `minImageCount + 1`，并受 `maxImageCount` 限制。
 - Graphics/Present 队列族不同则使用 `CONCURRENT` 图像共享，否则 `EXCLUSIVE`。
 - 默认不透明；构造参数可请求透明 Surface，但当前 Renderer 使用默认不透明模式。
-- 记录 `currentTransform`，供 Renderer 做投影和裁剪旋转补偿。
+- 记录 `currentTransform`，供后端做投影和裁剪旋转补偿。
 - `setSize()` 和 `requestRebuild()` 只记录状态，真正重建延迟到 `render()`。
 - 重建前会 `vkDeviceWaitIdle()`，并将 Pipeline、RenderPass、Framebuffer 等一起重建。
 
@@ -304,28 +313,40 @@ UNDEFINED → TRANSFER_DST_OPTIMAL
 
 它不是通用纹理缓存，没有外部图片、脏上传、缓存键或淘汰策略。
 
+### 7.6 Metal 后端的差异
+
+iOS 的 `gpu::metal::MetalBackend`（`core/src/gpu/metal/metal_backend.{h,mm}`，pimpl，ObjC 对象全在 `.mm` 的 Impl 里）与 Vulkan 版渲染语义完全对齐：清屏色 `(0.06, 0.06, 0.09, 1.0)`、左上角原点 Y 向下坐标、顶点色 × 纹理、双帧在飞、16ms 等待超时返回 `Retry`。差异在实现机制：
+
+- 用 `CAMetalLayer` 的 `nextDrawable` 获取呈现目标，替代 acquire/present 交换链；Metal 没有 `OUT_OF_DATE` 概念，尺寸变化在 `renderFrame` 内自愈（ensureSize），不重试不重建造帧循环。
+- 帧槽同步用初值 2 的 `dispatch_semaphore_t`，等待超时 16ms 返回 `Retry`，对应 Vulkan 版 Fence 超时。
+- MVP 经 `setVertexBytes` 传入，`glm::ortho(0, w, h, 0, -1, 1)` 的 Y 翻转与 Vulkan 版坐标系对应，因此无需旋转补偿。
+- MSAA 首选 4x（设备不支持时降 1x），多采样颜色纹理用 memoryless 存储（对应 Vulkan 的 TRANSIENT），失败回退 private，再失败降单采样。
+- 着色器是内嵌 MSL 源字符串（`metal_shaders.h`），运行时 `newLibraryWithSource` 编译；构建期不跑 glslc。
+
 ## 8. Shader 与构建
 
-根 `CMakeLists.txt` 将以下实现编入 `svk_core`：
+根 `CMakeLists.txt` 将以下实现编入 `svk_core`（host 侧构建，不含 Metal）：
 
-- Renderer。
-- 四个 GPU 模块。
-- Canvas。
+- `renderer.cpp`（编排层）与 `gpu/backend_factory.cpp`（装配点）。
+- `gpu/vulkan/` 的五个模块与 `vulkan_backend.cpp`。
+- `ui/canvas.cpp`。
 
-公开 Include 路径包含 `core/src`、GLM 和 spdlog；生成的 Shader 头目录为 Renderer 私有依赖。非 Android 构建通过 `find_package(Vulkan)` 链接 Vulkan，Android 使用 NDK 头和平台宿主提供的链接环境。
+`gpu/metal/` 只由 iOS Xcode 工程在定义 `SVK_METAL_BACKEND=1` 时编译，不进 host 构建。公开 Include 路径包含 `core/src`、GLM 和 spdlog；生成的 Shader 头目录为 `svk_core` 私有依赖。非 Android 构建通过 `find_package(Vulkan)` 链接 Vulkan，Android 使用 NDK 头和平台宿主提供的链接环境。
 
-Shader 在 CMake 配置阶段处理：
+Vulkan 后端的 Shader 在 CMake 配置阶段处理（只服务 Vulkan 路径，Android/鸿蒙/host 同此）：
 
 1. `glslc` 编译 Vertex 和 Fragment GLSL。
 2. `embed_shaders.cmake` 将 SPIR-V 按小端字节序转成 `uint32_t` 数组。
 3. 生成 `assets/ui_shaders.h`。
 4. 删除临时 `.spv` 文件。
 
-运行时只读取内嵌数组，不读取 Shader 源文件或 `.spv` 文件。
+运行时只读取内嵌数组，不读取 Shader 源文件或 `.spv` 文件。iOS 工程没有这一步：Metal 着色器以内嵌 MSL 源字符串在运行时编译（见 7.6），也不链接 MoltenVK。
 
 ## 9. 生命周期与线程模型
 
 当前契约是：**同一个 Renderer 的所有公共方法在同一个线程顺序调用，无内部锁。** 当前三端宿主都直接由 UI/主线程驱动；未来如果迁移到 Raster 线程，需要由上层统一迁移整条调用链。
+
+挂起/恢复的编排入口是 `Renderer::suspendSurface()` / `resumeSurface()`，语义与拆分前一致，具体资源操作下沉到各后端；以下资源列举以 Vulkan 后端为例。
 
 Surface 挂起时：
 
@@ -339,7 +360,7 @@ Surface 恢复时：
 - 重建 Surface、Swapchain、UiPipeline 和 Framebuffer。
 - 不重建设备级和执行级资源。
 
-尺寸重建、挂起和销毁都使用同步 `vkDeviceWaitIdle()`，实现简单，但会造成调用线程停顿。
+尺寸重建、挂起和销毁都使用同步 `vkDeviceWaitIdle()`（Metal 后端为等待在飞命令完成），实现简单，但会造成调用线程停顿。
 
 部分注释仍保留母项目的 Compositor、Raster 或按需渲染术语，与当前 UI 线程 + 持续帧回调的宿主模型不完全一致，后续应统一清理。
 
@@ -362,6 +383,14 @@ Surface 恢复时：
   SIGILL/SIGABRT/SIGFPE）尽力 flush 诊断日志与登记的钩子（如 BinaryRecorder），
   然后以默认动作重抛信号保留崩溃报告；仅 unix 系有效，工程上的最优努力，
   非严格 async-signal-safe。
+- 脱敏：`key=value` 命中敏感清单（phone/token/idcard 等，支持 `_token` 后缀）
+  就地掩码，全通道生效；`setSensitiveKeys()` 覆盖清单、`setMaskingEnabled()`
+  开关。
+- 落盘加密：`LogFileConfig::fileEncryptionKeyHex`（64 位十六进制 ChaCha20 密钥）
+  开启后主/审计文件 sink 换为加密 sink（`log_crypto.h`，混淆级防明文检索，
+  不做轮转）；`decryptFileToFile()` 供工具侧还原。
+- 日志归集：`collectLogFiles()` 按修改时间窗复制日志到目标目录并写
+  manifest.txt（session、文件清单）；压缩与上传由平台/业务层完成。
 - `asyncQueuedCount()`、`asyncOverrunCount()`、`asyncDroppedCount()`：查询异步队列状态。
 - `flush()`、`shutdown()`：生命周期收尾封装，不跨 JNI/NAPI 抛异常。
 - `SVK_LOGV/D/I/W/E`：Trace、Debug、Info、Warn、Error 五级宏（引擎/业务通道）。
@@ -452,10 +481,11 @@ audit-YYYYMMDD-HHMMSS-<毫秒>.log              # 审计通道（独立文件）
 
 ### 10.5 初始化与生命周期日志事件
 
-冷启动时，顶层事件按以下顺序出现：
+冷启动时，顶层事件按以下顺序出现（以 Vulkan 后端为例）：
 
 ```text
 [svk][renderer][initialize_start]
+[svk][renderer][initialize_stage_start stage=backend backend=vulkan]
 [svk][renderer][initialize_stage_start stage=vulkan_context]
 [svk][vulkan][instance_create_start]
 [svk][vulkan][surface_create_start]
@@ -465,18 +495,31 @@ audit-YYYYMMDD-HHMMSS-<毫秒>.log              # 审计通道（独立文件）
 [svk][renderer][initialize_stage_done stage=vulkan_context]
 [svk][renderer][initialize_stage_start stage=texture_cache]
 [svk][renderer][initialize_stage_done stage=texture_cache]
-[svk][renderer][initialize_stage_start stage=swapchain]
-[svk][renderer][initialize_stage_done stage=swapchain]
-[svk][renderer][initialize_stage_start stage=ui_pipeline]
-[svk][renderer][initialize_stage_done stage=ui_pipeline]
-[svk][renderer][initialize_stage_start stage=framebuffers]
-[svk][renderer][initialize_stage_done stage=framebuffers]
 [svk][renderer][initialize_stage_start stage=command_pool]
+[svk][renderer][initialize_stage_done stage=command_pool]
 [svk][renderer][initialize_stage_start stage=vertex_buffers]
+[svk][renderer][initialize_stage_done stage=vertex_buffers]
 [svk][renderer][initialize_stage_start stage=command_buffers]
+[svk][renderer][initialize_stage_done stage=command_buffers]
 [svk][renderer][initialize_stage_start stage=sync_objects]
+[svk][renderer][initialize_stage_done stage=sync_objects]
+[svk][renderer][initialize_stage_done stage=backend]
+[svk][renderer][initialize_stage_start stage=surface]
+[svk][renderer][initialize_stage_done stage=swapchain]
+[svk][renderer][initialize_stage_done stage=ui_pipeline]
+[svk][renderer][initialize_stage_done stage=framebuffers]
+[svk][renderer][initialize_stage_done stage=surface]
 [svk][renderer][initialize_complete duration_ms=...]
 ```
+
+iOS 走 Metal 后端时结构相同，`backend=metal`，后端内部事件换成
+`[svk][metal]` 通道：`initialize_start` → `msaa_selected` → `library_created`
+（内嵌 MSL 运行时编译）→ `sampler_created` → `initialize_complete
+frames_in_flight=2`；surface 阶段为 `surface_create_start` →
+`surface_created width=... height=... msaa=...`。挂起/销毁对应
+`surface_destroy_start / surface_destroyed` 与 `shutdown_start /
+shutdown_complete`；拿不到 drawable 时按 5s 节流记录
+`next_drawable_failed action=retry`。
 
 子模块还会记录关键资源参数：实例扩展、物理设备名称和队列族、白纹理显存、Surface 能力、Swapchain 尺寸/格式/PresentMode、MSAA 采样和显存、RenderPass 附件、Shader 字节数、顶点缓冲容量以及同步对象数量。
 
