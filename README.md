@@ -70,7 +70,9 @@ C++ 日志会保留各端终端输出，并经有界异步队列写入应用私�
 兼顾问题复现与高频业务场景。引擎模块、资源所有权、帧流程、简化点和日志
 获取方式，详见 [docs/engine-core.md](docs/engine-core.md)。三端从进程启动
 到每帧上屏的完整时序图，见
-[docs/startup-sequence.md](docs/startup-sequence.md)。
+[docs/startup-sequence.md](docs/startup-sequence.md)。日志体系面向金融业务
+的演进设计（限速、多通道、行情录制、合规），见
+[docs/logging-design.md](docs/logging-design.md)。
 
 ## 构建与打开 App
 
