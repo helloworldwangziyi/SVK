@@ -87,16 +87,23 @@ void test_spdlog_base_use(){
     SVK_LOGE("practice", "level_err value={}", 4);
 
     // 统计循环写 100万 条的耗时。终端 I/O 是主要开销，这本身就是第一个观察点。
+    // 脱敏默认开启：同一基准跑两遍，量化 key=value 掩码扫描的开销。
     constexpr int kCount = 1000000;
-    const auto begin = std::chrono::steady_clock::now();
-    for(int i = 0; i < kCount; ++i){
-        SVK_LOGI("practice", "timing seq={} value={}", i, i * 2);
-    }
-    const auto end = std::chrono::steady_clock::now();
-
-    const double ms = std::chrono::duration<double, std::milli>(end - begin).count();
-
-    std::printf("\n%d 条日志，耗时 %.1f ms，约 %.0f 条/秒\n", kCount, ms, kCount / (ms / 1000.0));
+    auto benchmark = [&](const char* label){
+        const auto begin = std::chrono::steady_clock::now();
+        for(int i = 0; i < kCount; ++i){
+            SVK_LOGI("practice", "timing seq={} value={}", i, i * 2);
+        }
+        const auto end = std::chrono::steady_clock::now();
+        const double ms = std::chrono::duration<double, std::milli>(end - begin).count();
+        std::printf("%s：%d 条日志，耗时 %.1f ms，约 %.0f 条/秒\n",
+                    label, kCount, ms, kCount / (ms / 1000.0));
+    };
+    std::printf("\n");
+    benchmark("脱敏开启（默认）");
+    svk::log::setMaskingEnabled(false);
+    benchmark("脱敏关闭      ");
+    svk::log::setMaskingEnabled(true);
 
     svk::log::shutdown();
 }

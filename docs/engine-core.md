@@ -435,6 +435,10 @@ svk::log::write（格式化正文并复制 log_msg）
 
 异步线程池是进程级共享的，第一次 `initWithFile()` 中的队列大小和线程数生效；后续调用复用同一个线程池。
 
+性能参考（host，2026-10-21，`test_log` 终端基准 100 万条）：脱敏开启约 87 万条/秒，
+关闭约 98 万条/秒——`key=value` 掩码扫描开销约 13%，主要瓶颈仍是终端 I/O。
+对移动端日志量级（远小于此）脱敏成本可忽略；基准两档对比常驻 `test_log.cpp`。
+
 ### 10.3 三端实际输出位置
 
 | 环境 | 终端输出 | 文件目录 | 初始化方式 |
@@ -464,6 +468,12 @@ audit-YYYYMMDD-HHMMSS-<毫秒>.log              # 审计通道（独立文件）
 ```text
 [svk][log][file_started platform=<platform> path=...]
 ```
+
+三端壳在日志初始化时同时安装崩溃 flush 处理器（`installCrashHandler()`），
+并把平台/机型/系统写入 `sessionInfo`，随 `session_started` 落在主通道与
+审计通道的文件头（Android 取 `ro.product.model` / `ro.build.version.release`，
+iOS 取 `hw.machine` / `systemVersion`；鸿蒙暂只写 `platform=hongmeng`，
+机型与 App 版本由业务层补充）。
 
 ### 10.4 当前覆盖范围
 

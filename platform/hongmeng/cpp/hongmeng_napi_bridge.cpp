@@ -81,8 +81,11 @@ static void ensureLogger() {
             });
     }
 
+    svk::log::installCrashHandler();  // 幂等：崩溃时尽力 flush 日志与录制器
     svk::log::LogFileConfig config;
     config.directory = logDirectory();
+    // App 版本与机型由业务层补充（DeviceInfo Kit 按 SDK 版本差异较大，不盲接）。
+    config.sessionInfo = "platform=hongmeng";
     if (config.directory.empty()) {
         svk::log::init(logger);
         return;

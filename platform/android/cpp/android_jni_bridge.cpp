@@ -8,6 +8,7 @@
 // ============================================================================
 
 #include <jni.h>
+#include <sys/system_properties.h>
 
 #include <string>
 
@@ -32,11 +33,40 @@ static svk::IPlatform* g_platform = nullptr;
 static std::string g_logDirectory;
 static std::string g_reportedLogFile;
 
+// 会话信息写入日志文件头（session_started），排障第一现场。
+// 空格替换为 '_' 保持 key=value 一段式；App 版本由业务层在 Java 侧另行补充。
+static std::string deviceSessionInfo() {
+    char model[PROP_VALUE_MAX] = {};
+    __system_property_get("ro.product.model", model);
+    char osRelease[PROP_VALUE_MAX] = {};
+    __system_property_get("ro.build.version.release", osRelease);
+    std::string info = "platform=android";
+    auto appendSanitized = [&info](const char* key, const char* value) {
+        if (!value[0]) {
+            return;
+        }
+        std::string sanitized = value;
+        for (auto& ch : sanitized) {
+            if (ch == ' ') {
+                ch = '_';
+            }
+        }
+        info += " ";
+        info += key;
+        info += "=";
+        info += sanitized;
+    };
+    appendSanitized("model", model);
+    appendSanitized("os", osRelease);
+    return info;
+}
+
 static void ensureLogger() {
     auto logger = spdlog::get("estarx-vulkan");
     if (!logger) {
         logger = spdlog::android_logger_mt("estarx-vulkan", "estarx-vulkan");
     }
+    svk::log::installCrashHandler();  // 幂等：崩溃时尽力 flush 日志与录制器
     if (g_logDirectory.empty()) {
         svk::log::init(logger);
         return;
@@ -44,6 +74,7 @@ static void ensureLogger() {
 
     svk::log::LogFileConfig config;
     config.directory = g_logDirectory;
+    config.sessionInfo = deviceSessionInfo();
     std::string filePath;
     if (!svk::log::initWithFile(logger, config, &filePath)) {
         return;

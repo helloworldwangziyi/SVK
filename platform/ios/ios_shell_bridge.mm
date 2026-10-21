@@ -9,6 +9,9 @@
 // ============================================================================
 
 #import <Foundation/Foundation.h>
+#import <UIKit/UIKit.h>
+
+#include <sys/sysctl.h>
 
 #include <string>
 
@@ -47,14 +50,45 @@ static std::string logDirectory() {
     }
 }
 
+// 会话信息写入日志文件头（session_started），排障第一现场。
+// 空格替换为 '_' 保持 key=value 一段式；App 版本由业务层在壳侧另行补充。
+static std::string deviceSessionInfo() {
+    @autoreleasepool {
+        char machine[256] = {};
+        size_t size = sizeof(machine);
+        sysctlbyname("hw.machine", machine, &size, nullptr, 0);
+        std::string info = "platform=ios";
+        auto appendSanitized = [&info](const char* key, std::string value) {
+            if (value.empty()) {
+                return;
+            }
+            for (auto& ch : value) {
+                if (ch == ' ') {
+                    ch = '_';
+                }
+            }
+            info += " ";
+            info += key;
+            info += "=";
+            info += value;
+        };
+        appendSanitized("model", machine);
+        NSString* osVersion = [[UIDevice currentDevice] systemVersion];
+        appendSanitized("os", osVersion.UTF8String ? osVersion.UTF8String : "");
+        return info;
+    }
+}
+
 static void ensureLogger() {
     auto logger = spdlog::get("estarx-vulkan");
     if (!logger) {
         logger = spdlog::stdout_logger_mt("estarx-vulkan");
     }
+    svk::log::installCrashHandler();  // 幂等：崩溃时尽力 flush 日志与录制器
 
     svk::log::LogFileConfig config;
     config.directory = logDirectory();
+    config.sessionInfo = deviceSessionInfo();
     if (config.directory.empty()) {
         svk::log::init(logger);
         return;
