@@ -21,6 +21,7 @@
 #endif
 
 #include "log.h"
+#include "trace.h"
 
 static int g_failures = 0;
 
@@ -345,6 +346,37 @@ void test_log_crash_flush(){
 }
 #endif
 
+void test_log_frame_seq(){
+    namespace fs = std::filesystem;
+    const std::string dir =
+        (fs::temp_directory_path() / "svk_test_frame").string();
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+
+    svk::log::init("svk_test_frame");
+    svk::log::LogFileConfig config;
+    config.directory = dir;
+    config.filePrefix = "test-frame";
+    config.async = false;
+    CHECK_TRUE(svk::log::initWithFile(spdlog::get("svk_test_frame"), config));
+
+    svk::log::setFrameSeq(42);
+    SVK_LOGI("renderer", "frame_marker_event");
+    svk::log::clearFrameSeq();
+    SVK_LOGI("renderer", "no_frame_marker_event");
+    svk::log::flush();
+    svk::log::shutdown();
+
+    const std::string content =
+        readFileToString(findFileWithPrefix(dir, "test-frame"));
+    CHECK_TRUE(content.find("frame_marker_event frame=42]") !=
+               std::string::npos);
+    CHECK_TRUE(content.find("no_frame_marker_event]") != std::string::npos);
+
+    fs::remove_all(dir);
+    std::printf("--- 帧号关联：frame= 字段校验完成 ---\n");
+}
+
 int main() {
 
     // 学习 spdlog 的基本用法，输出到终端，并统计耗时。
@@ -366,6 +398,12 @@ int main() {
     // 崩溃保全：fork 子进程制造 SIGSEGV，验证缓冲日志被处理器落盘。
     test_log_crash_flush();
 #endif
+
+    // 帧号关联：setFrameSeq 后日志自动带 frame= 字段。
+    test_log_frame_seq();
+
+    // trace 宏编译检查（host 上为空实现）。
+    SVK_TRACE_SCOPE("test.main");
 
     if (g_failures > 0) {
         std::printf("\n%d 项 CHECK 失败\n", g_failures);

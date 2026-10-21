@@ -65,8 +65,9 @@ QuoteRecorder（行情数据，业务层独立模块）
 
 ### 5.2 帧号关联
 
-引擎单线程模型下，renderer 每帧写 `thread_local` 当前 `frame_seq`，
-`write()` 自动附加 `frame=` 字段，掉帧/重建类日志直接定位到帧。
+`svk::log::setFrameSeq(seq)` 写 `thread_local` 当前帧号，日志统一出口自动附加
+`frame=` 字段，掉帧/重建类日志直接定位到帧。renderer 每帧调用一次即可
+（引擎单线程模型，开销可忽略）；renderer 侧的接线待引擎重构稳定后接入。
 
 ### 5.3 编译期与运行时级别
 
@@ -164,4 +165,4 @@ quotes/<trading_day>/<prefix>-HHMMSS.qlog
 | ⑥ | QuoteReader：过滤、导出、回放（`core/src/recorder/binary_reader.h`） | 已完成 |
 | ⑦ | 崩溃保全：signal handler flush（`installCrashHandler`）+ recorder mmap 落盘 | 已完成 |
 | ⑧ | 合规：脱敏（key=value 掩码）、落盘加密（ChaCha20，混淆级）、归集（manifest，压缩上传留平台层） | 已完成 |
-| ⑨ | 帧号关联、SVK_TRACE_SCOPE 平台追踪 | 未开始 |
+| ⑨ | 帧号关联（`setFrameSeq`）、`SVK_TRACE_SCOPE`（Android ATrace，其余平台待接线） | 已完成 |

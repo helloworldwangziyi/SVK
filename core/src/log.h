@@ -356,6 +356,12 @@ inline std::vector<std::string>& sensitiveKeysStorage() {
     return keys;
 }
 
+/** 当前线程的帧号：renderer 每帧 setFrameSeq，日志自动带 frame= 字段。 */
+inline uint64_t& frameSeqStorage() {
+    static thread_local uint64_t seq = 0;
+    return seq;
+}
+
 inline bool& maskingEnabledStorage() {
     static bool value = true;
     return value;
@@ -434,6 +440,9 @@ inline void writeFormatted(spdlog::logger* logger,
         return;
     }
     maskSensitiveInPlace(detail);
+    if (const uint64_t frameSeq = frameSeqStorage(); frameSeq != 0) {
+        detail += " frame=" + std::to_string(frameSeq);
+    }
     logger->log(level, "[svk][{}][{}]", feature, detail);
     if (level >= spdlog::level::err) {
         try {
@@ -719,6 +728,19 @@ inline void setSensitiveKeys(std::vector<std::string> keys) {
 /** @brief 开关敏感字段掩码（默认开）。 */
 inline void setMaskingEnabled(bool enabled) {
     detail::maskingEnabledStorage() = enabled;
+}
+
+/**
+ * @brief 设置当前线程的帧号，之后本线程日志自动带 frame=N 字段。
+ * renderer 每帧调用；平台壳线程不设置则不带。引擎单线程模型下开销可忽略。
+ */
+inline void setFrameSeq(uint64_t seq) {
+    detail::frameSeqStorage() = seq;
+}
+
+/** @brief 清除帧号（如渲染挂起后），后续日志不再带 frame= 字段。 */
+inline void clearFrameSeq() {
+    detail::frameSeqStorage() = 0;
 }
 
 /** 日志归集选项：按修改时间窗把日志文件复制到目标目录，附 manifest。 */
