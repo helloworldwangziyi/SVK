@@ -152,7 +152,7 @@ quotes/<trading_day>/<prefix>-HHMMSS.qlog
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
-| ① | log.h 限速原语（ONCE / THROTTLE / THROTTLE_KEY） | 进行中 |
+| ① | log.h 限速原语（ONCE / THROTTLE / THROTTLE_KEY） | 已完成 |
 | ② | 多通道分离：引擎/业务/审计（审计独立文件 + block 策略） | 未开始 |
 | ③ | 文件 rotation 与过期清理（按交易日 + 总量上限） | 未开始 |
 | ④ | 启动 session 头、运行时级别下发 | 未开始 |

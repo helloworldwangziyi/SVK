@@ -19,16 +19,27 @@
  * svk::log::init("estarx");
  * SVK_LOGI("renderer", "initialized width={} height={}", w, h);
  * @endcode
+ *
+ * 高频事件用限速变体，防止刷屏淹没关键日志：
+ * @code{.cpp}
+ * SVK_LOGW_ONCE("vulkan", "validation_unsupported layer={}", name);   // 只写一次
+ * SVK_LOGI_THROTTLE("quote", 5000, "alive ticks={}", n);              // 按调用点限速
+ * SVK_LOGW_THROTTLE_KEY("quote", instrumentId, 60000, "seq_gap ..."); // 按合约限速
+ * @endcode
+ * 限速窗口内压制的条数，在下一次放行时以 suppressed=N 附在正文末尾。
  */
 
+#include <atomic>
 #include <chrono>
 #include <cctype>
 #include <cstddef>
 #include <ctime>
 #include <iomanip>
 #include <memory>
+#include <mutex>
 #include <sstream>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -119,6 +130,84 @@ inline std::string makeLogFilePath(const LogFileConfig& config) {
              << std::put_time(&local, "%Y%m%d-%H%M%S") << '-' << std::setfill('0')
              << std::setw(3) << millis.count() << ".log";
     return joinPath(config.directory, filename.str());
+}
+
+/** 调用点级限速状态：每个 THROTTLE 宏展开在调用点自带一份 static。 */
+struct ThrottleState {
+    std::atomic<int64_t> lastPassMs{0};
+    std::atomic<uint32_t> suppressed{0};
+};
+
+inline int64_t steadyNowMs() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
+
+/**
+ * 调用点级限速：interval 窗口内的重复调用被拒绝并计数；窗口外第一次调用放行，
+ * 并经 suppressedOut 带回自上次放行以来被压制的条数。多线程并发放行时，
+ * 竞争失败者按被压制处理。
+ */
+inline bool throttleTryPass(ThrottleState& state, std::chrono::milliseconds interval,
+                            uint32_t* suppressedOut) {
+    const int64_t nowMs = steadyNowMs();
+    int64_t last = state.lastPassMs.load(std::memory_order_relaxed);
+    if (last != 0 && nowMs - last < interval.count()) {
+        state.suppressed.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+    if (!state.lastPassMs.compare_exchange_strong(last, nowMs,
+                                                  std::memory_order_relaxed)) {
+        state.suppressed.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+    *suppressedOut = state.suppressed.exchange(0, std::memory_order_relaxed);
+    return true;
+}
+
+/**
+ * 按 key 限速（典型 key：合约代码），各 key 独立计时。key 集合需有界
+ * （如订阅的合约数），条目不淘汰；用于无界 key 时必须另行清理。
+ */
+inline bool throttleKeyTryPass(const std::string& key,
+                               std::chrono::milliseconds interval,
+                               uint32_t* suppressedOut) {
+    struct Entry {
+        int64_t lastPassMs = 0;
+        uint32_t suppressed = 0;
+    };
+    static std::mutex s_mutex;
+    static std::unordered_map<std::string, Entry> s_entries;
+
+    std::lock_guard<std::mutex> lock(s_mutex);
+    Entry& entry = s_entries[key];
+    const int64_t nowMs = steadyNowMs();
+    if (entry.lastPassMs != 0 && nowMs - entry.lastPassMs < interval.count()) {
+        ++entry.suppressed;
+        return false;
+    }
+    entry.lastPassMs = nowMs;
+    *suppressedOut = entry.suppressed;
+    entry.suppressed = 0;
+    return true;
+}
+
+/** 已格式化正文的统一出口：级别拦截、三段式前缀、Error 同步 flush。 */
+inline void writeFormatted(spdlog::level::level_enum level,
+                           spdlog::string_view_t feature,
+                           const std::string& detail) {
+    spdlog::logger* logger = spdlog::default_logger_raw();
+    if (!logger || !logger->should_log(level)) {
+        return;
+    }
+    logger->log(level, "[svk][{}][{}]", feature, detail);
+    if (level >= spdlog::level::err) {
+        try {
+            logger->flush();
+        } catch (...) {
+        }
+    }
 }
 
 } // namespace detail
@@ -339,15 +428,65 @@ inline void write(spdlog::level::level_enum level,
     if (!logger || !logger->should_log(level)) {
         return;
     }
-    const auto detail = spdlog::fmt_lib::format(
-        format, std::forward<Args>(args)...);
-    logger->log(level, "[svk][{}][{}]", feature, detail);
-    if (level >= spdlog::level::err) {
-        try {
-            logger->flush();
-        } catch (...) {
-        }
+    detail::writeFormatted(
+        level, feature,
+        spdlog::fmt_lib::format(format, std::forward<Args>(args)...));
+}
+
+/**
+ * @brief 限速写日志：同一调用点在 interval 内只放行第一条；下一次放行时
+ * 把窗口内被压制的条数以 suppressed=N 附在正文末尾。
+ * @param state 调用点状态，由 THROTTLE 宏的调用点 static 提供
+ */
+template <typename... Args>
+inline void writeThrottled(detail::ThrottleState& state,
+                           std::chrono::milliseconds interval,
+                           spdlog::level::level_enum level,
+                           spdlog::string_view_t feature,
+                           spdlog::format_string_t<Args...> format,
+                           Args&&... args) {
+    spdlog::logger* logger = spdlog::default_logger_raw();
+    if (!logger || !logger->should_log(level)) {
+        return;
     }
+    uint32_t suppressed = 0;
+    if (!detail::throttleTryPass(state, interval, &suppressed)) {
+        return;
+    }
+    std::string detail =
+        spdlog::fmt_lib::format(format, std::forward<Args>(args)...);
+    if (suppressed > 0) {
+        detail += " suppressed=" + std::to_string(suppressed);
+    }
+    detail::writeFormatted(level, feature, detail);
+}
+
+/**
+ * @brief 按 key 限速写日志：各 key 独立计时，互不影响（典型：按合约代码
+ * 限速同类告警）。key 集合需有界。
+ */
+template <typename... Args>
+inline void writeThrottledKey(spdlog::string_view_t key,
+                              std::chrono::milliseconds interval,
+                              spdlog::level::level_enum level,
+                              spdlog::string_view_t feature,
+                              spdlog::format_string_t<Args...> format,
+                              Args&&... args) {
+    spdlog::logger* logger = spdlog::default_logger_raw();
+    if (!logger || !logger->should_log(level)) {
+        return;
+    }
+    uint32_t suppressed = 0;
+    if (!detail::throttleKeyTryPass(std::string(key.data(), key.size()), interval,
+                                    &suppressed)) {
+        return;
+    }
+    std::string detail =
+        spdlog::fmt_lib::format(format, std::forward<Args>(args)...);
+    if (suppressed > 0) {
+        detail += " suppressed=" + std::to_string(suppressed);
+    }
+    detail::writeFormatted(level, feature, detail);
 }
 
 } // namespace log
@@ -364,3 +503,96 @@ inline void write(spdlog::level::level_enum level,
     ::svk::log::write(spdlog::level::warn, feature, __VA_ARGS__)
 #define SVK_LOGE(feature, ...) \
     ::svk::log::write(spdlog::level::err, feature, __VA_ARGS__)
+
+/// ONCE：同一调用点在整个进程生命周期只写一次（如驱动不支持的特性告警）。
+#define SVK_LOGV_ONCE(feature, ...) \
+    do { \
+        static std::atomic<bool> svkLogOnce_ = false; \
+        if (!svkLogOnce_.exchange(true)) { \
+            ::svk::log::write(spdlog::level::trace, feature, __VA_ARGS__); \
+        } \
+    } while (0)
+#define SVK_LOGD_ONCE(feature, ...) \
+    do { \
+        static std::atomic<bool> svkLogOnce_ = false; \
+        if (!svkLogOnce_.exchange(true)) { \
+            ::svk::log::write(spdlog::level::debug, feature, __VA_ARGS__); \
+        } \
+    } while (0)
+#define SVK_LOGI_ONCE(feature, ...) \
+    do { \
+        static std::atomic<bool> svkLogOnce_ = false; \
+        if (!svkLogOnce_.exchange(true)) { \
+            ::svk::log::write(spdlog::level::info, feature, __VA_ARGS__); \
+        } \
+    } while (0)
+#define SVK_LOGW_ONCE(feature, ...) \
+    do { \
+        static std::atomic<bool> svkLogOnce_ = false; \
+        if (!svkLogOnce_.exchange(true)) { \
+            ::svk::log::write(spdlog::level::warn, feature, __VA_ARGS__); \
+        } \
+    } while (0)
+#define SVK_LOGE_ONCE(feature, ...) \
+    do { \
+        static std::atomic<bool> svkLogOnce_ = false; \
+        if (!svkLogOnce_.exchange(true)) { \
+            ::svk::log::write(spdlog::level::err, feature, __VA_ARGS__); \
+        } \
+    } while (0)
+
+/// THROTTLE：同一调用点在 intervalMs 窗口内只写第一条，窗口内压制的条数
+/// 在下一次放行时以 suppressed=N 附在正文末尾（如活性心跳、重试刷屏）。
+#define SVK_LOGV_THROTTLE(feature, intervalMs, ...) \
+    do { \
+        static ::svk::log::detail::ThrottleState svkThrottleState_; \
+        ::svk::log::writeThrottled(svkThrottleState_, \
+                                   std::chrono::milliseconds(intervalMs), \
+                                   spdlog::level::trace, feature, __VA_ARGS__); \
+    } while (0)
+#define SVK_LOGD_THROTTLE(feature, intervalMs, ...) \
+    do { \
+        static ::svk::log::detail::ThrottleState svkThrottleState_; \
+        ::svk::log::writeThrottled(svkThrottleState_, \
+                                   std::chrono::milliseconds(intervalMs), \
+                                   spdlog::level::debug, feature, __VA_ARGS__); \
+    } while (0)
+#define SVK_LOGI_THROTTLE(feature, intervalMs, ...) \
+    do { \
+        static ::svk::log::detail::ThrottleState svkThrottleState_; \
+        ::svk::log::writeThrottled(svkThrottleState_, \
+                                   std::chrono::milliseconds(intervalMs), \
+                                   spdlog::level::info, feature, __VA_ARGS__); \
+    } while (0)
+#define SVK_LOGW_THROTTLE(feature, intervalMs, ...) \
+    do { \
+        static ::svk::log::detail::ThrottleState svkThrottleState_; \
+        ::svk::log::writeThrottled(svkThrottleState_, \
+                                   std::chrono::milliseconds(intervalMs), \
+                                   spdlog::level::warn, feature, __VA_ARGS__); \
+    } while (0)
+#define SVK_LOGE_THROTTLE(feature, intervalMs, ...) \
+    do { \
+        static ::svk::log::detail::ThrottleState svkThrottleState_; \
+        ::svk::log::writeThrottled(svkThrottleState_, \
+                                   std::chrono::milliseconds(intervalMs), \
+                                   spdlog::level::err, feature, __VA_ARGS__); \
+    } while (0)
+
+/// THROTTLE_KEY：同一 key 在 intervalMs 窗口内只写第一条，各 key 独立计时
+/// （如按合约代码限速 seq_gap 告警）。key 集合需有界。
+#define SVK_LOGV_THROTTLE_KEY(feature, key, intervalMs, ...) \
+    ::svk::log::writeThrottledKey((key), std::chrono::milliseconds(intervalMs), \
+                                  spdlog::level::trace, feature, __VA_ARGS__)
+#define SVK_LOGD_THROTTLE_KEY(feature, key, intervalMs, ...) \
+    ::svk::log::writeThrottledKey((key), std::chrono::milliseconds(intervalMs), \
+                                  spdlog::level::debug, feature, __VA_ARGS__)
+#define SVK_LOGI_THROTTLE_KEY(feature, key, intervalMs, ...) \
+    ::svk::log::writeThrottledKey((key), std::chrono::milliseconds(intervalMs), \
+                                  spdlog::level::info, feature, __VA_ARGS__)
+#define SVK_LOGW_THROTTLE_KEY(feature, key, intervalMs, ...) \
+    ::svk::log::writeThrottledKey((key), std::chrono::milliseconds(intervalMs), \
+                                  spdlog::level::warn, feature, __VA_ARGS__)
+#define SVK_LOGE_THROTTLE_KEY(feature, key, intervalMs, ...) \
+    ::svk::log::writeThrottledKey((key), std::chrono::milliseconds(intervalMs), \
+                                  spdlog::level::err, feature, __VA_ARGS__)
