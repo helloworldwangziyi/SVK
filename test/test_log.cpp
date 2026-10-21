@@ -246,6 +246,56 @@ void test_log_rotation_prune(){
     std::printf("--- 轮转与清理：rotation / 过期 / 总量校验完成 ---\n");
 }
 
+void test_log_session_and_levels(){
+    namespace fs = std::filesystem;
+    const std::string dir =
+        (fs::temp_directory_path() / "svk_test_session").string();
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+
+    svk::log::init("svk_test_session");
+    svk::log::LogFileConfig config;
+    config.directory = dir;
+    config.filePrefix = "test-session";
+    config.sessionInfo = "app=1.2.3 device=test-runner";
+    config.async = false;  // 同步写盘：级别判定在调用线程完成，测试无竞态
+    CHECK_TRUE(svk::log::initWithFile(spdlog::get("svk_test_session"), config));
+
+    // session 头：id 非空，且主/审计文件都带 session_started。
+    const std::string sessionId = svk::log::currentSessionId();
+    CHECK_TRUE(!sessionId.empty());
+
+    // 运行时级别：文件级别提到 warn 后，info 不落盘，warn/error 正常。
+    svk::log::setFileLevel(spdlog::level::warn);
+    SVK_LOGI("practice", "level_filter_info_should_skip");
+    SVK_LOGW("practice", "level_filter_warn_should_write");
+    svk::log::setFileLevel(spdlog::level::debug);
+    SVK_LOGI("practice", "level_restored_info_should_write");
+    svk::log::flush();
+    svk::log::shutdown();
+
+    const std::string mainPath = findFileWithPrefix(dir, "test-session");
+    const std::string auditPath = findFileWithPrefix(dir, "audit");
+    CHECK_TRUE(!mainPath.empty() && !auditPath.empty());
+    const std::string mainContent = readFileToString(mainPath);
+    const std::string auditContent = readFileToString(auditPath);
+    CHECK_TRUE(mainContent.find("session_started id=" + sessionId) !=
+               std::string::npos);
+    CHECK_TRUE(mainContent.find("app=1.2.3 device=test-runner") !=
+               std::string::npos);
+    CHECK_TRUE(auditContent.find("session_started id=" + sessionId) !=
+               std::string::npos);
+    CHECK_TRUE(mainContent.find("level_filter_info_should_skip") ==
+               std::string::npos);
+    CHECK_TRUE(mainContent.find("level_filter_warn_should_write") !=
+               std::string::npos);
+    CHECK_TRUE(mainContent.find("level_restored_info_should_write") !=
+               std::string::npos);
+
+    fs::remove_all(dir);
+    std::printf("--- session 头与运行时级别校验完成 ---\n");
+}
+
 int main() {
 
     // 学习 spdlog 的基本用法，输出到终端，并统计耗时。
@@ -259,6 +309,9 @@ int main() {
 
     // 轮转与清理：单文件上限切分、过期删除、总量上限。
     test_log_rotation_prune();
+
+    // session 头与运行时级别控制。
+    test_log_session_and_levels();
 
     if (g_failures > 0) {
         std::printf("\n%d 项 CHECK 失败\n", g_failures);

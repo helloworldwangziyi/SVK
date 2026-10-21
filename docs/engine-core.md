@@ -354,6 +354,10 @@ Surface 恢复时：
 - `LogFileConfig`：配置文件目录、文件名前缀、终端/文件级别、自动 Flush 级别，以及异步队列大小、线程数和溢出策略。
 - `svk::log::initWithFile(...)`：保留平台终端 sink，追加 `basic_file_sink_mt`，并默认放入异步 logger。
 - `hasFileSink()`、`currentLogFilePath()`：查询文件日志状态和准确路径。
+- `currentSessionId()`：本次文件日志的会话 id（`LogFileConfig::sessionInfo`
+  由平台壳填入版本/机型/系统，随 `session_started` 写入主通道与审计通道文件头）。
+- `setLevels(terminal, file)`、`setLevel(level)`、`setFileLevel(level)`：
+  运行时调整终端/文件级别，立即生效，用于排障临时下调级别。
 - `asyncQueuedCount()`、`asyncOverrunCount()`、`asyncDroppedCount()`：查询异步队列状态。
 - `flush()`、`shutdown()`：生命周期收尾封装，不跨 JNI/NAPI 抛异常。
 - `SVK_LOGV/D/I/W/E`：Trace、Debug、Info、Warn、Error 五级宏（引擎/业务通道）。

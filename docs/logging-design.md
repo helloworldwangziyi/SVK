@@ -155,7 +155,7 @@ quotes/<trading_day>/<prefix>-HHMMSS.qlog
 | ① | log.h 限速原语（ONCE / THROTTLE / THROTTLE_KEY） | 已完成 |
 | ② | 多通道分离：审计通道独立文件、同步直写（等价不丢，较 block 队列更简单） | 已完成 |
 | ③ | 文件 rotation（单文件上限切分）与过期/总量清理 | 已完成 |
-| ④ | 启动 session 头、运行时级别下发 | 未开始 |
+| ④ | 启动 session 头、运行时级别下发（`setLevels`/`setFileLevel`） | 已完成 |
 | ⑤ | QuoteRecorder 写路径：环形缓冲 + 后台落盘 + 四层防线 | 未开始 |
 | ⑥ | QuoteReader：过滤、导出、回放 | 未开始 |
 | ⑦ | 崩溃保全：signal handler flush → mmap sink | 未开始 |

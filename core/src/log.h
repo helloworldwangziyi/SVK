@@ -39,6 +39,7 @@
 #include <iomanip>
 #include <memory>
 #include <mutex>
+#include <random>
 #include <sstream>
 #include <string>
 #include <unordered_map>
@@ -76,6 +77,9 @@ struct LogFileConfig {
     int maxFileAgeDays = 7;
     size_t auditMaxTotalBytes = 50ull * 1024 * 1024;
     int auditMaxFileAgeDays = 30;
+    // 会话信息：由平台壳填入（App 版本、机型、系统版本等），随 session_started
+    // 写入主通道与审计通道文件头。
+    std::string sessionInfo;
 };
 
 /** 日志通道：引擎/业务共用默认 logger（可丢）；审计独立文件、同步直写（不丢）。 */
@@ -114,6 +118,21 @@ inline spdlog::sink_ptr& currentAuditFileSinkStorage() {
 
 inline std::string& currentAuditLogFilePathStorage() {
     static std::string value;
+    return value;
+}
+
+inline std::string& currentSessionIdStorage() {
+    static std::string value;
+    return value;
+}
+
+inline spdlog::level::level_enum& currentTerminalLevelStorage() {
+    static auto value = spdlog::level::debug;
+    return value;
+}
+
+inline spdlog::level::level_enum& currentFileLevelStorage() {
+    static auto value = spdlog::level::debug;
     return value;
 }
 
@@ -167,6 +186,27 @@ inline std::string makeLogFilePath(const LogFileConfig& config,
              << std::put_time(&local, "%Y%m%d-%H%M%S") << '-' << std::setfill('0')
              << std::setw(3) << millis.count() << ".log";
     return joinPath(config.directory, filename.str());
+}
+
+/** 会话 id：时间戳 + 4 位十六进制随机后缀，用于关联诊断日志与行情录制。 */
+inline std::string makeSessionId() {
+    const auto now = std::chrono::system_clock::now();
+    const auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            now.time_since_epoch()) %
+                        1000;
+    const std::time_t time = std::chrono::system_clock::to_time_t(now);
+    std::tm local{};
+#if defined(_WIN32)
+    localtime_s(&local, &time);
+#else
+    localtime_r(&time, &local);
+#endif
+    std::random_device rd;
+    std::ostringstream id;
+    id << std::put_time(&local, "%Y%m%d-%H%M%S") << '-' << std::setfill('0')
+       << std::setw(3) << millis.count() << '-' << std::hex << std::setw(4)
+       << (rd() & 0xFFFF);
+    return id.str();
 }
 
 /**
@@ -330,6 +370,9 @@ inline void init(const std::shared_ptr<spdlog::logger>& logger) {
     detail::auditLoggerStorage().reset();
     detail::currentAuditFileSinkStorage().reset();
     detail::currentAuditLogFilePathStorage().clear();
+    detail::currentSessionIdStorage().clear();
+    detail::currentTerminalLevelStorage() = spdlog::level::debug;
+    detail::currentFileLevelStorage() = spdlog::level::debug;
     detail::currentAsyncStorage() = false;
 }
 
@@ -473,6 +516,13 @@ inline bool initWithFile(const std::shared_ptr<spdlog::logger>& terminalLogger,
         if (createdFilePath) {
             *createdFilePath = filePath;
         }
+        detail::currentTerminalLevelStorage() = config.terminalLevel;
+        detail::currentFileLevelStorage() = config.fileLevel;
+        detail::currentSessionIdStorage() = detail::makeSessionId();
+        spdlog::info("[svk][log][session_started id={} info=\"{}\"]",
+                     detail::currentSessionIdStorage(), config.sessionInfo);
+        auditLogger->log(spdlog::level::info, "[svk][log][session_started id={}]",
+                         detail::currentSessionIdStorage());
         if (prunedFiles + prunedAuditFiles > 0) {
             spdlog::info(
                 "[svk][log][log_pruned files={} bytes={} audit_files={} "
@@ -515,6 +565,50 @@ inline const std::string& currentLogFilePath() {
 /** 审计通道的独立日志文件路径；未初始化文件日志时为空。 */
 inline const std::string& currentAuditLogFilePath() {
     return detail::currentAuditLogFilePathStorage();
+}
+
+/** 本次文件日志的会话 id；未初始化文件日志时为空。 */
+inline const std::string& currentSessionId() {
+    return detail::currentSessionIdStorage();
+}
+
+/**
+ * @brief 运行时调整终端/文件级别（排障时临时把 fileLevel 降到 Debug 等）。
+ * 同时作用于主通道与审计通道；调整立即生效，不需要重建 logger。
+ */
+inline void setLevels(spdlog::level::level_enum terminalLevel,
+                      spdlog::level::level_enum fileLevel) {
+    detail::currentTerminalLevelStorage() = terminalLevel;
+    detail::currentFileLevelStorage() = fileLevel;
+    const auto loggerLevel =
+        terminalLevel < fileLevel ? terminalLevel : fileLevel;
+    const auto& fileSink = detail::currentFileSinkStorage();
+    const auto& auditFileSink = detail::currentAuditFileSinkStorage();
+    spdlog::logger* loggers[] = {spdlog::default_logger_raw(),
+                                 detail::auditLoggerStorage().get()};
+    for (spdlog::logger* logger : loggers) {
+        if (!logger) {
+            continue;
+        }
+        for (const auto& sink : logger->sinks()) {
+            if (sink == fileSink || sink == auditFileSink) {
+                sink->set_level(fileLevel);
+            } else {
+                sink->set_level(terminalLevel);
+            }
+        }
+        logger->set_level(loggerLevel);
+    }
+}
+
+/** @brief 终端与文件同时调整级别。 */
+inline void setLevel(spdlog::level::level_enum level) {
+    setLevels(level, level);
+}
+
+/** @brief 只调整文件级别，终端保持不变。 */
+inline void setFileLevel(spdlog::level::level_enum level) {
+    setLevels(detail::currentTerminalLevelStorage(), level);
 }
 
 inline size_t asyncQueuedCount() {
@@ -574,6 +668,7 @@ inline void shutdown() noexcept {
     detail::auditLoggerStorage().reset();
     detail::currentAuditFileSinkStorage().reset();
     detail::currentAuditLogFilePathStorage().clear();
+    detail::currentSessionIdStorage().clear();
     detail::currentAsyncStorage() = false;
 }
 
