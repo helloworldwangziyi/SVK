@@ -356,7 +356,10 @@ Surface 恢复时：
 - `hasFileSink()`、`currentLogFilePath()`：查询文件日志状态和准确路径。
 - `asyncQueuedCount()`、`asyncOverrunCount()`、`asyncDroppedCount()`：查询异步队列状态。
 - `flush()`、`shutdown()`：生命周期收尾封装，不跨 JNI/NAPI 抛异常。
-- `SVK_LOGV/D/I/W/E`：Trace、Debug、Info、Warn、Error 五级宏。
+- `SVK_LOGV/D/I/W/E`：Trace、Debug、Info、Warn、Error 五级宏（引擎/业务通道）。
+- `SVK_ALOGV/D/I/W/E`：审计通道宏（`svk::log::writeAudit`），登录、下单、成交等
+  不可丢事件写入独立文件、同步直写，不经过异步队列，也不提供限速变体。
+- `currentAuditLogFilePath()`：审计通道的独立日志文件路径。
 - `SVK_LOG*_ONCE`：同一调用点只写一次；`SVK_LOG*_THROTTLE(feature, intervalMs, ...)`：
   同一调用点在时间窗内只放行第一条；`SVK_LOG*_THROTTLE_KEY(feature, key, intervalMs, ...)`：
   按 key（如合约代码）各自限速。限速压制的条数在下一次放行时以 `suppressed=N` 附在正文末尾。

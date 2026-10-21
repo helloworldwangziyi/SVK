@@ -1,16 +1,48 @@
 /**
  * @file test_log.cpp
- * @brief 日志练习起点：输出到终端，并统计耗时；覆盖限速宏的放行与压制行为。
+ * @brief 日志练习与回归：终端输出与耗时统计、限速宏行为、审计通道文件分离。
  *
  * 运行：./build/host/test/test_log，或 cd build/host && ctest -R test_log
  */
 
 #include <chrono>
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
+#include <string>
 #include <thread>
 
 #include "log.h"
 
+static int g_failures = 0;
+
+#define CHECK_TRUE(cond) \
+    do { \
+        if (!(cond)) { \
+            ++g_failures; \
+            std::printf("CHECK 失败: %s:%d: %s\n", __FILE__, __LINE__, #cond); \
+        } \
+    } while (0)
+
+static std::string readFileToString(const std::string& path) {
+    std::ifstream in(path);
+    std::ostringstream ss;
+    ss << in.rdbuf();
+    return ss.str();
+}
+
+static std::string findFileWithPrefix(const std::string& dir,
+                                      const std::string& prefix) {
+    namespace fs = std::filesystem;
+    for (const auto& entry : fs::directory_iterator(dir)) {
+        if (entry.is_regular_file() &&
+            entry.path().filename().string().rfind(prefix, 0) == 0) {
+            return entry.path().string();
+        }
+    }
+    return "";
+}
 
 void test_spdlog_base_use(){
     svk::log::init("svk_test_base_use");
@@ -72,6 +104,46 @@ void test_log_throttle(){
     svk::log::shutdown();
 }
 
+void test_log_audit_channel(){
+    namespace fs = std::filesystem;
+    const std::string dir =
+        (fs::temp_directory_path() / "svk_test_audit_channel").string();
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+
+    svk::log::init("svk_test_audit");
+    svk::log::LogFileConfig config;
+    config.directory = dir;
+    config.filePrefix = "test-main";
+    config.auditFilePrefix = "test-audit";
+    const bool ok = svk::log::initWithFile(spdlog::get("svk_test_audit"), config);
+    CHECK_TRUE(ok);
+
+    SVK_LOGI("practice", "engine_line_marker value={}", 1);
+    SVK_ALOGI("trade", "order_submit instrument=ag2406 price={}", 3450.5);
+    SVK_ALOGW("account", "login_done user=u1001");
+
+    svk::log::flush();
+    CHECK_TRUE(!svk::log::currentAuditLogFilePath().empty());
+    svk::log::shutdown();
+
+    // 主文件有引擎日志、没有审计日志；审计文件恰好相反。
+    const std::string mainPath = findFileWithPrefix(dir, "test-main");
+    const std::string auditPath = findFileWithPrefix(dir, "test-audit");
+    CHECK_TRUE(!mainPath.empty());
+    CHECK_TRUE(!auditPath.empty());
+    const std::string mainContent = readFileToString(mainPath);
+    const std::string auditContent = readFileToString(auditPath);
+    CHECK_TRUE(mainContent.find("engine_line_marker") != std::string::npos);
+    CHECK_TRUE(mainContent.find("order_submit") == std::string::npos);
+    CHECK_TRUE(auditContent.find("order_submit") != std::string::npos);
+    CHECK_TRUE(auditContent.find("login_done") != std::string::npos);
+    CHECK_TRUE(auditContent.find("engine_line_marker") == std::string::npos);
+
+    fs::remove_all(dir);
+    std::printf("--- 审计通道：主/审计文件分离校验完成 ---\n");
+}
+
 int main() {
 
     // 学习 spdlog 的基本用法，输出到终端，并统计耗时。
@@ -80,5 +152,13 @@ int main() {
     // 限速宏：ONCE / THROTTLE / THROTTLE_KEY 的放行与压制行为。
     test_log_throttle();
 
+    // 审计通道：独立文件、与主文件内容隔离。
+    test_log_audit_channel();
+
+    if (g_failures > 0) {
+        std::printf("\n%d 项 CHECK 失败\n", g_failures);
+        return 1;
+    }
+    std::printf("\n全部 CHECK 通过\n");
     return 0;
 }
