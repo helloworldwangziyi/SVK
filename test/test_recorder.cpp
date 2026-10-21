@@ -16,6 +16,13 @@
 #include <string>
 #include <thread>
 
+#if defined(__unix__) || defined(__APPLE__)
+#include <csignal>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
+
 #include "recorder/binary_reader.h"
 #include "recorder/binary_recorder.h"
 
@@ -277,11 +284,114 @@ static void test_reader_roundtrip() {
     std::printf("--- reader：roundtrip / 过滤 / 导出 / 容错校验完成 ---\n");
 }
 
+#if defined(__unix__) || defined(__APPLE__)
+// mmap 崩溃保全：flush 进映射区的数据崩溃后仍在（内核写回脏页）；
+// 之后进入内存缓冲但没落盘的 50 条必须丢——这就是崩溃语义的边界。
+static void test_recorder_mmap_crash() {
+    const std::string dir =
+        (fs::temp_directory_path() / "svk_test_recorder_crash").string();
+    fs::remove_all(dir);
+
+    std::fflush(stdout);  // fork 前冲掉 stdio 缓冲，避免子进程重复输出
+    const pid_t pid = fork();
+    CHECK_TRUE(pid >= 0);
+    if (pid == 0) {
+        svk::recorder::BinaryRecorder recorder;
+        svk::recorder::BinaryRecorder::Config config;
+        config.directory = dir;
+        config.filePrefix = "quotes";
+        config.useMmap = true;
+        config.flushBytes = 1 << 20;      // 不触发按量落盘
+        config.flushIntervalMs = 600000;  // 不触发按时间落盘
+        if (!recorder.start(config)) {
+            _exit(2);
+        }
+        svk::log::installCrashHandler();
+        for (int i = 0; i < 100; ++i) {
+            const Tick tick = makeTick(i);
+            recorder.write(1, tick);
+        }
+        recorder.flush();  // 100 条进入 mmap 映射区
+        for (int i = 100; i < 150; ++i) {
+            const Tick tick = makeTick(i);
+            recorder.write(1, tick);
+        }
+        // 不 flush、不 stop，直接崩溃。
+        std::raise(SIGSEGV);
+        _exit(3);
+    }
+    int status = 0;
+    CHECK_TRUE(waitpid(pid, &status, 0) == pid);
+    CHECK_TRUE(WIFSIGNALED(status) && WTERMSIG(status) == SIGSEGV);
+
+    const auto files = svk::recorder::BinaryReader::listFiles(dir, ".qlog");
+    CHECK_TRUE(files.size() == 1);
+    std::vector<uint64_t> seqs;
+    svk::recorder::BinaryReader::readFile(
+        files.front(), {},
+        [&](const svk::recorder::RecordView& rec) {
+            Tick tick{};
+            std::memcpy(&tick, rec.payload, sizeof(Tick));
+            seqs.push_back(tick.seq);
+            return true;
+        });
+    CHECK_TRUE(seqs.size() == 100);
+    for (size_t i = 0; i < seqs.size(); ++i) {
+        CHECK_TRUE(seqs[i] == i);
+    }
+    fs::remove_all(dir);
+    std::printf("--- recorder：mmap 崩溃数据保全校验完成（保全 %zu 条）---\n",
+                seqs.size());
+}
+
+// mmap 扩容：写入总量超过 4MB 映射块触发 remap，数据仍完整可读。
+static void test_recorder_mmap_grow() {
+    const std::string dir =
+        (fs::temp_directory_path() / "svk_test_recorder_grow").string();
+    fs::remove_all(dir);
+
+    svk::recorder::BinaryRecorder recorder;
+    svk::recorder::BinaryRecorder::Config config;
+    config.directory = dir;
+    config.useMmap = true;
+    config.bufferedBytesLimit = 8ull << 20;  // 大于本次写入总量，扩容测试不触发丢弃
+    config.flushBytes = 256 << 10;
+    config.flushIntervalMs = 50;
+    config.maxFileBytes = 16ull << 20;  // 单文件够大，不轮转
+    CHECK_TRUE(recorder.start(config));
+
+    constexpr int kCount = 5000;
+    const std::string payload(1000, 'g');  // 每帧约 1016B，共约 5MB > 4MB 块
+    for (int i = 0; i < kCount; ++i) {
+        recorder.write(7, payload.data(), payload.size());
+    }
+    recorder.flush();
+    recorder.stop();
+    CHECK_TRUE(recorder.stats().droppedRecords == 0);
+
+    const auto files = svk::recorder::BinaryReader::listFiles(dir, ".qlog");
+    CHECK_TRUE(files.size() == 1);
+    int64_t readBack = svk::recorder::BinaryReader::readFile(
+        files.front(), {},
+        [](const svk::recorder::RecordView& rec) {
+            CHECK_TRUE(rec.payloadBytes == 1000);
+            return true;
+        });
+    CHECK_TRUE(readBack == kCount);
+    fs::remove_all(dir);
+    std::printf("--- recorder：mmap 扩容校验完成 ---\n");
+}
+#endif // __unix__ || __APPLE__
+
 int main() {
     test_write_and_rotation();
     test_buffer_overflow_drops();
     test_prune_on_start();
     test_reader_roundtrip();
+#if defined(__unix__) || defined(__APPLE__)
+    test_recorder_mmap_crash();
+    test_recorder_mmap_grow();
+#endif
 
     if (g_failures > 0) {
         std::printf("\n%d 项 CHECK 失败\n", g_failures);

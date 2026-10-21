@@ -1,6 +1,6 @@
 # 引擎层（core）代码汇总与审阅
 
-代码快照：当前工作区（基于 `6b5bbbd`，含后续日志增强）。
+代码快照：当前工作区（基于 `6b5bbbd`，含后续日志增强与多后端拆分）。
 
 本文汇总当前引擎层的实际代码，范围以 `core/` 为主，并包含与它直接相关的 `CMakeLists.txt`、`cmake/embed_shaders.cmake` 和 `shaders/`。平台目录只在说明接口边界和日志注入时涉及。
 
@@ -358,6 +358,10 @@ Surface 恢复时：
   由平台壳填入版本/机型/系统，随 `session_started` 写入主通道与审计通道文件头）。
 - `setLevels(terminal, file)`、`setLevel(level)`、`setFileLevel(level)`：
   运行时调整终端/文件级别，立即生效，用于排障临时下调级别。
+- `installCrashHandler()`、`addCrashFlushHook(hook)`：崩溃时（SIGSEGV/SIGBUS/
+  SIGILL/SIGABRT/SIGFPE）尽力 flush 诊断日志与登记的钩子（如 BinaryRecorder），
+  然后以默认动作重抛信号保留崩溃报告；仅 unix 系有效，工程上的最优努力，
+  非严格 async-signal-safe。
 - `asyncQueuedCount()`、`asyncOverrunCount()`、`asyncDroppedCount()`：查询异步队列状态。
 - `flush()`、`shutdown()`：生命周期收尾封装，不跨 JNI/NAPI 抛异常。
 - `SVK_LOGV/D/I/W/E`：Trace、Debug、Info、Warn、Error 五级宏（引擎/业务通道）。

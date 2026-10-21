@@ -33,6 +33,7 @@
 #include <atomic>
 #include <chrono>
 #include <cctype>
+#include <csignal>
 #include <cstddef>
 #include <ctime>
 #include <filesystem>
@@ -671,6 +672,70 @@ inline void shutdown() noexcept {
     detail::currentSessionIdStorage().clear();
     detail::currentAsyncStorage() = false;
 }
+
+/// ---- 崩溃保全（设计见 docs/logging-design.md） ----
+
+/** 崩溃时尽力调用的 flush 钩子（如 BinaryRecorder 的落盘钩子）。 */
+using CrashFlushHook = void (*)();
+
+namespace detail {
+
+inline std::atomic<CrashFlushHook>* crashHookSlots() {
+    static std::atomic<CrashFlushHook> slots[8] = {};
+    return slots;
+}
+
+inline void crashSignalHandler(int sig) {
+    // 尽力而为的 flush：严格说以下调用都不是 async-signal-safe，
+    // 但崩溃路径上这是工程通行做法（glog/xlog 同款取舍）；随后恢复默认
+    // 动作重抛信号，保留 core dump 与系统崩溃报告。
+    flush();
+    for (int i = 0; i < 8; ++i) {
+        if (const CrashFlushHook hook =
+                crashHookSlots()[i].load(std::memory_order_acquire)) {
+            hook();
+        }
+    }
+    std::signal(sig, SIG_DFL);
+    std::raise(sig);
+}
+
+} // namespace detail
+
+/** 登记崩溃 flush 钩子；最多 8 个，满返回 false。 */
+inline bool addCrashFlushHook(CrashFlushHook hook) {
+    for (int i = 0; i < 8; ++i) {
+        CrashFlushHook expected = nullptr;
+        if (detail::crashHookSlots()[i].compare_exchange_strong(
+                expected, hook, std::memory_order_acq_rel)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+#if defined(__unix__) || defined(__APPLE__)
+/**
+ * @brief 安装崩溃 flush 处理器（SIGSEGV/SIGBUS/SIGILL/SIGABRT/SIGFPE），幂等。
+ * 崩溃时先尽力 flush 诊断日志与登记的钩子，再以默认动作重抛信号。
+ * 平台壳应在进程启动早期调用。
+ */
+inline void installCrashHandler() {
+    static std::once_flag once;
+    std::call_once(once, [] {
+        struct sigaction action {};
+        action.sa_handler = detail::crashSignalHandler;
+        sigemptyset(&action.sa_mask);
+        action.sa_flags = 0;
+        const int signals[] = {SIGSEGV, SIGBUS, SIGILL, SIGABRT, SIGFPE};
+        for (const int sig : signals) {
+            sigaction(sig, &action, nullptr);
+        }
+    });
+}
+#else
+inline void installCrashHandler() {}
+#endif
 
 /**
  * @brief 写一条结构化项目日志。

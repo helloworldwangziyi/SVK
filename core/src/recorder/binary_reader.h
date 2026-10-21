@@ -169,6 +169,10 @@ public:
                 nullptr,
                 length,
             };
+            // mmap 文件崩溃后保留整块容量，尾部是零填充：全零帧头视作数据结束。
+            if (length == 0 && view.type == 0 && view.timestampNs == 0) {
+                break;
+            }
             if (frameStart + kFrameHeaderBytes + length > fileBytes) {
                 corrupted = fileBytes - frameStart;  // 尾部不完整帧
                 break;

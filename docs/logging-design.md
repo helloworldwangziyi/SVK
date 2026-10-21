@@ -162,6 +162,6 @@ quotes/<trading_day>/<prefix>-HHMMSS.qlog
 | ④ | 启动 session 头、运行时级别下发（`setLevels`/`setFileLevel`） | 已完成 |
 | ⑤ | QuoteRecorder 写路径：有界缓冲 + 后台落盘 + 四层防线（`core/src/recorder/binary_recorder.h`） | 已完成 |
 | ⑥ | QuoteReader：过滤、导出、回放（`core/src/recorder/binary_reader.h`） | 已完成 |
-| ⑦ | 崩溃保全：signal handler flush → mmap sink | 未开始 |
+| ⑦ | 崩溃保全：signal handler flush（`installCrashHandler`）+ recorder mmap 落盘 | 已完成 |
 | ⑧ | 合规：脱敏、落盘加密、回捞上传 | 未开始 |
 | ⑨ | 帧号关联、SVK_TRACE_SCOPE 平台追踪 | 未开始 |

@@ -13,6 +13,13 @@
 #include <string>
 #include <thread>
 
+#if defined(__unix__) || defined(__APPLE__)
+#include <csignal>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
+
 #include "log.h"
 
 static int g_failures = 0;
@@ -296,6 +303,48 @@ void test_log_session_and_levels(){
     std::printf("--- session 头与运行时级别校验完成 ---\n");
 }
 
+#if defined(__unix__) || defined(__APPLE__)
+void test_log_crash_flush(){
+    namespace fs = std::filesystem;
+    const std::string dir =
+        (fs::temp_directory_path() / "svk_test_crash").string();
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+
+    std::fflush(stdout);  // fork 前冲掉 stdio 缓冲，避免子进程重复输出
+    const pid_t pid = fork();
+    CHECK_TRUE(pid >= 0);
+    if (pid == 0) {
+        // 子进程：同步 logger + flushOnLevel=err，info 行只进缓冲区不落地；
+        // 崩溃处理器应把它 flush 出去。
+        svk::log::init("svk_test_crash");
+        svk::log::LogFileConfig config;
+        config.directory = dir;
+        config.filePrefix = "test-crash";
+        config.async = false;
+        config.flushOnLevel = spdlog::level::err;
+        if (!svk::log::initWithFile(spdlog::get("svk_test_crash"), config)) {
+            _exit(2);
+        }
+        svk::log::installCrashHandler();
+        SVK_LOGI("practice", "crash_marker_buffered_line");
+        std::raise(SIGSEGV);
+        _exit(3);  // 不应到达：处理器会以默认动作重抛信号
+    }
+    int status = 0;
+    CHECK_TRUE(waitpid(pid, &status, 0) == pid);
+    CHECK_TRUE(WIFSIGNALED(status) && WTERMSIG(status) == SIGSEGV);
+
+    const std::string mainPath = findFileWithPrefix(dir, "test-crash");
+    CHECK_TRUE(!mainPath.empty());
+    CHECK_TRUE(readFileToString(mainPath).find("crash_marker_buffered_line") !=
+               std::string::npos);
+
+    fs::remove_all(dir);
+    std::printf("--- 崩溃保全：信号后缓冲日志落盘校验完成 ---\n");
+}
+#endif
+
 int main() {
 
     // 学习 spdlog 的基本用法，输出到终端，并统计耗时。
@@ -312,6 +361,11 @@ int main() {
 
     // session 头与运行时级别控制。
     test_log_session_and_levels();
+
+#if defined(__unix__) || defined(__APPLE__)
+    // 崩溃保全：fork 子进程制造 SIGSEGV，验证缓冲日志被处理器落盘。
+    test_log_crash_flush();
+#endif
 
     if (g_failures > 0) {
         std::printf("\n%d 项 CHECK 失败\n", g_failures);

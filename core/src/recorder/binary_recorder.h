@@ -19,6 +19,11 @@
  *   3. 目录总量/过期 → 启动与轮转时 LRU 清理；
  *   4. 大行情写入跟不上 → 业务读取 stats() 的 dropped 增长后自行降级采样。
  *
+ * 崩溃保全：unix 系默认 mmap 落盘（config.useMmap），写入即进内核页缓存，
+ * 进程崩溃时脏页仍由内核写回；配合 svk::log::installCrashHandler() 的
+ * 崩溃钩子做最后一次 msync。崩溃后的文件尾部为零填充，reader 按
+ * "全零帧头 = 数据结束" 处理。正常 stop() 会把文件截到真实大小。
+ *
  * 使用方式：
  * @code{.cpp}
  * svk::recorder::BinaryRecorder recorder;
@@ -42,6 +47,13 @@
 #include <mutex>
 #include <string>
 #include <vector>
+
+#if defined(__unix__) || defined(__APPLE__)
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <unistd.h>
+#define SVK_RECORDER_HAS_MMAP 1
+#endif
 
 #include "log.h"
 
@@ -76,13 +88,15 @@ inline uint64_t fnv1a64(const std::string& text) {
     return hash;
 }
 
-/** 落盘写接口：⑤ 用 ofstream 实现，⑦ 增加 mmap 实现（崩溃保全）。 */
+/** 落盘写接口：默认 ofstream 实现；unix 系可用 mmap 实现（崩溃保全）。 */
 class IFileWriter {
 public:
     virtual ~IFileWriter() = default;
     virtual bool open(const std::string& path) = 0;
     virtual bool write(const void* data, size_t bytes) = 0;
     virtual void flush() = 0;
+    /** 崩溃钩子里的最后努力：尽力把已写数据推进到内核。 */
+    virtual void syncForCrash() = 0;
     virtual void close() = 0;
     virtual size_t size() const = 0;
 };
@@ -111,6 +125,8 @@ public:
         }
     }
 
+    void syncForCrash() override { flush(); }
+
     void close() override {
         if (out_.is_open()) {
             out_.flush();
@@ -124,6 +140,104 @@ private:
     std::ofstream out_;
     size_t size_ = 0;
 };
+
+#if SVK_RECORDER_HAS_MMAP
+/**
+ * mmap 写盘器：按 4MB 块扩容映射，写入即进内核页缓存——进程崩溃时
+ * 脏页仍由内核写回，不依赖 flush，这是崩溃保全的关键（xlog 同款思路）。
+ * 正常 close 时把文件截到真实大小；崩溃时文件保留整块容量，
+ * 尾部零填充由 reader 按"全零帧头 = 数据结束"规则处理。
+ */
+class MmapWriter final : public IFileWriter {
+public:
+    ~MmapWriter() override { close(); }
+
+    bool open(const std::string& path) override {
+        fd_ = ::open(path.c_str(), O_RDWR | O_CREAT | O_TRUNC, 0644);
+        if (fd_ < 0) {
+            return false;
+        }
+        if (!remap(kChunkBytes)) {
+            ::close(fd_);
+            fd_ = -1;
+            return false;
+        }
+        return true;
+    }
+
+    bool write(const void* data, size_t bytes) override {
+        if (size_ + bytes > capacity_) {
+            size_t newCapacity = capacity_;
+            while (size_ + bytes > newCapacity) {
+                newCapacity += kChunkBytes;
+            }
+            if (!remap(newCapacity)) {
+                return false;
+            }
+        }
+        std::memcpy(static_cast<uint8_t*>(mapped_) + size_, data, bytes);
+        size_ += bytes;
+        return true;
+    }
+
+    void flush() override {
+        if (mapped_ != nullptr) {
+            ::msync(mapped_, size_, MS_ASYNC);
+        }
+    }
+
+    void syncForCrash() override {
+        if (mapped_ != nullptr) {
+            ::msync(mapped_, size_, MS_SYNC);
+        }
+    }
+
+    void close() override {
+        if (mapped_ != nullptr) {
+            ::msync(mapped_, size_, MS_SYNC);
+            ::munmap(mapped_, capacity_);
+            mapped_ = nullptr;
+        }
+        if (fd_ >= 0) {
+            // 截到真实大小，正常路径下 reader 看到的是精确文件。
+            ::ftruncate(fd_, static_cast<off_t>(size_));
+            ::close(fd_);
+            fd_ = -1;
+        }
+        capacity_ = 0;
+        size_ = 0;
+    }
+
+    size_t size() const override { return size_; }
+
+private:
+    static constexpr size_t kChunkBytes = 4ull << 20;
+
+    bool remap(size_t newCapacity) {
+        if (mapped_ != nullptr) {
+            ::munmap(mapped_, capacity_);
+            mapped_ = nullptr;
+        }
+        if (::ftruncate(fd_, static_cast<off_t>(newCapacity)) != 0) {
+            return false;
+        }
+        void* mapped =
+            ::mmap(nullptr, newCapacity, PROT_READ | PROT_WRITE, MAP_SHARED,
+                   fd_, 0);
+        if (mapped == MAP_FAILED) {
+            return false;
+        }
+        mapped_ = mapped;
+        capacity_ = newCapacity;
+        return true;
+    }
+
+    int fd_ = -1;
+    void* mapped_ = nullptr;
+    size_t capacity_ = 0;
+    size_t size_ = 0;
+};
+#endif // SVK_RECORDER_HAS_MMAP
 
 } // namespace detail
 
@@ -145,6 +259,7 @@ public:
         size_t maxTotalBytes = 500ull << 20;   // 目录总量上限，0=不限制
         int maxFileAgeDays = 3;                // 过期删除，<=0 不按时间删
         int statsIntervalMs = 60000;           // recorder_stats 汇总周期
+        bool useMmap = true;  // unix 系默认 mmap 落盘（崩溃保全），失败自动回退 ofstream
     };
 
     struct Stats {
@@ -186,6 +301,20 @@ public:
         if (!openNewFile()) {
             return false;
         }
+        // 崩溃保全：登记实例，由 log.h 的崩溃处理器统一回调。
+        {
+            static std::once_flag hookOnce;
+            std::call_once(hookOnce, [] {
+                svk::log::addCrashFlushHook(&BinaryRecorder::crashFlushAll);
+            });
+            for (auto& slot : s_crashRegistry) {
+                BinaryRecorder* expected = nullptr;
+                if (slot.compare_exchange_strong(expected, this)) {
+                    crashRegistered_ = true;
+                    break;
+                }
+            }
+        }
         running_ = true;
         writer_ = std::thread([this] { writerLoop(); });
         SVK_LOGI("recorder", "recorder_started dir={} session={}",
@@ -210,6 +339,15 @@ public:
             fileWriter_->flush();
             fileWriter_->close();
             fileWriter_.reset();
+        }
+        if (crashRegistered_) {
+            for (auto& slot : s_crashRegistry) {
+                BinaryRecorder* expected = this;
+                if (slot.compare_exchange_strong(expected, nullptr)) {
+                    break;
+                }
+            }
+            crashRegistered_ = false;
         }
         running_ = false;
         SVK_LOGI("recorder", "recorder_stopped written={} dropped={}",
@@ -351,9 +489,23 @@ private:
     }
 
     bool openNewFile() {
-        auto writer = std::make_unique<detail::OfstreamWriter>();
         const std::string path = makeFilePath();
-        if (!writer->open(path)) {
+        std::unique_ptr<detail::IFileWriter> writer;
+#if SVK_RECORDER_HAS_MMAP
+        if (config_.useMmap) {
+            auto mmapWriter = std::make_unique<detail::MmapWriter>();
+            if (mmapWriter->open(path)) {
+                writer = std::move(mmapWriter);
+            }
+        }
+#endif
+        if (!writer) {
+            auto ofstreamWriter = std::make_unique<detail::OfstreamWriter>();
+            if (ofstreamWriter->open(path)) {
+                writer = std::move(ofstreamWriter);
+            }
+        }
+        if (!writer) {
             SVK_LOGE("recorder", "recorder_open_failed path={}", path);
             return false;
         }
@@ -470,6 +622,24 @@ private:
     std::unique_ptr<detail::IFileWriter> fileWriter_;
     std::string currentFilePath_;
     uint64_t fileSeq_ = 0;  // 文件名序号：同一毫秒内连续轮转也不重名
+    bool crashRegistered_ = false;
+
+    /** 崩溃时由 log.h 处理器回调：对所有活动实例做最后努力的落盘。 */
+    static void crashFlushAll() noexcept {
+        for (const auto& slot : s_crashRegistry) {
+            if (BinaryRecorder* recorder = slot.load(std::memory_order_acquire)) {
+                recorder->flushForCrash();
+            }
+        }
+    }
+
+    void flushForCrash() noexcept {
+        if (fileWriter_) {
+            fileWriter_->syncForCrash();
+        }
+    }
+
+    inline static std::atomic<BinaryRecorder*> s_crashRegistry[4] = {};
 
     std::mutex mutex_;
     std::condition_variable cv_;
