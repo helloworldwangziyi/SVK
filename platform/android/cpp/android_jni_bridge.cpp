@@ -1,14 +1,11 @@
-// ============================================================================
-// JNI 实现层：Java 薄壳(NativeBridge)与 core 之间的翻译层。
-//
-// 命名约定（静态注册）：函数名 = Java_<包名>_<类名>_<方法名>，
-// 包名中的 . 换成 _。extern "C" 保持符号不被 name mangling，
-// JVM 才能按名字在 .so 里查到。本层只做"解包参数 → 转发 core"，
-// 不含任何业务逻辑；所有函数都运行在 Android UI 线程。
-// ============================================================================
+// Android JNI 薄桥：按 Surface ID 管理当前探针需要的固定槽位。
+// 这里不抽象通用 Surface 框架；槽位只隔离各系统 Surface 的 Renderer/Platform，
+// 场景状态、手势与动画全部留在 samples 的原生页面中。
 
 #include <jni.h>
 
+#include <array>
+#include <cstdint>
 #include <memory>
 #include <string>
 
@@ -23,13 +20,25 @@
 extern "C" svk::IPlatform* svkCreateAndroidPlatform(JNIEnv* env, jobject surface);
 extern "C" void svkDestroyAndroidPlatform(svk::IPlatform* platform);
 
-static std::unique_ptr<svk::IApp> g_app;
-static svk::IRasterSurface* g_renderer = nullptr;
-static svk::IPlatform* g_platform = nullptr;
-static std::string g_logDirectory;
-static std::string g_reportedLogFile;
+namespace {
 
-static void ensureLogger() {
+constexpr jint kSurfaceCount = 3;
+
+struct SurfaceSlot {
+    std::unique_ptr<svk::IRasterSurface> renderer;
+    svk::IPlatform* platform = nullptr;
+};
+
+std::array<SurfaceSlot, kSurfaceCount> g_surfaces;
+std::unique_ptr<svk::IApp> g_app;
+std::string g_logDirectory;
+std::string g_reportedLogFile;
+
+bool validSurfaceId(jint id) {
+    return id >= 0 && id < kSurfaceCount;
+}
+
+void ensureLogger() {
     auto logger = spdlog::get("estarx-vulkan");
     if (!logger) {
         logger = spdlog::android_logger_mt("estarx-vulkan", "estarx-vulkan");
@@ -51,9 +60,19 @@ static void ensureLogger() {
     }
 }
 
-// Java: NativeBridge.nativeSetLogDirectory(String)
-// Activity 在 Surface 创建前传入应用私有日志目录；Surface 重建时 nativeInit
-// 重复进入 ensureLogger，core 会复用同一个文件而不是重复建文件。
+void suspendSlot(SurfaceSlot& slot, jint id) {
+    if (slot.renderer) {
+        slot.renderer->suspendSurface();
+    }
+    if (slot.platform) {
+        svkDestroyAndroidPlatform(slot.platform);
+        slot.platform = nullptr;
+    }
+    SVK_LOGI("android", "surface_suspended surface_id={}", id);
+}
+
+} // namespace
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_estarx_vulkan_NativeBridge_nativeSetLogDirectory(
     JNIEnv* env, jclass, jstring directory) {
@@ -70,47 +89,46 @@ Java_com_estarx_vulkan_NativeBridge_nativeSetLogDirectory(
     ensureLogger();
 }
 
-// Java: NativeBridge.nativeInit(Surface)
-// surface 创建就绪时调用（可能多次：退后台重建）。已有引擎时走保活热恢复，
-// 否则冷启动；失败时清理现场，保证下次 surfaceCreated 能干净重试。
 extern "C" JNIEXPORT void JNICALL
-Java_com_estarx_vulkan_NativeBridge_nativeInit(JNIEnv* env, jclass, jobject surface) {
+Java_com_estarx_vulkan_NativeBridge_nativeInit(JNIEnv* env, jclass, jint surfaceId,
+                                              jobject surface) {
     ensureLogger();
-
-    if (g_renderer) {
-        // 保活热恢复：引擎级资源（设备/纹理/命令设施）仍在，只按新 surface
-        // 重建 surface 级资源；失败则全量拆除，落到下面的冷启动兜底。
-        svk::IPlatform* resumed = svkCreateAndroidPlatform(env, surface);
-        if (resumed && g_renderer->resumeSurface(resumed)) {
-            svkDestroyAndroidPlatform(g_platform);
-            g_platform = resumed;
-            SVK_LOGI("android", "engine_resumed renderer=vulkan");
-            return;
-        }
-        SVK_LOGE("android", "engine_resume_failed action=cold_start");
-        if (resumed) {
-            svkDestroyAndroidPlatform(resumed);
-        }
-        delete g_renderer;
-        g_renderer = nullptr;
-        svkDestroyAndroidPlatform(g_platform);
-        g_platform = nullptr;
-    }
-
-    g_platform = svkCreateAndroidPlatform(env, surface);
-    if (!g_platform) {
-        SVK_LOGE("android", "engine_start_failed phase=create_platform");
+    if (!validSurfaceId(surfaceId) || !surface) {
+        SVK_LOGE("android", "surface_start_failed surface_id={} reason=invalid_args", surfaceId);
         return;
     }
 
-    g_renderer = svk::createRasterSurface(g_platform).release();
-    if (!g_renderer->initialize()) {
-        // 失败时按创建的反序清理干净，保证下次 surfaceCreated 能干净重试。
-        SVK_LOGE("android", "engine_start_failed phase=initialize_renderer");
-        delete g_renderer;
-        g_renderer = nullptr;
-        svkDestroyAndroidPlatform(g_platform);
-        g_platform = nullptr;
+    SurfaceSlot& slot = g_surfaces[static_cast<size_t>(surfaceId)];
+    if (slot.renderer) {
+        svk::IPlatform* resumed = svkCreateAndroidPlatform(env, surface);
+        if (resumed && slot.renderer->resumeSurface(resumed)) {
+            svkDestroyAndroidPlatform(slot.platform);
+            slot.platform = resumed;
+            SVK_LOGI("android", "surface_resumed surface_id={}", surfaceId);
+            return;
+        }
+        SVK_LOGE("android", "surface_resume_failed surface_id={} action=cold_start", surfaceId);
+        if (resumed) {
+            svkDestroyAndroidPlatform(resumed);
+        }
+        slot.renderer.reset();
+        svkDestroyAndroidPlatform(slot.platform);
+        slot.platform = nullptr;
+    }
+
+    slot.platform = svkCreateAndroidPlatform(env, surface);
+    if (!slot.platform) {
+        SVK_LOGE("android", "surface_start_failed surface_id={} phase=create_platform", surfaceId);
+        return;
+    }
+
+    slot.renderer = svk::createRasterSurface(slot.platform);
+    if (!slot.renderer->initialize()) {
+        SVK_LOGE("android", "surface_start_failed surface_id={} phase=initialize_renderer",
+                 surfaceId);
+        slot.renderer.reset();
+        svkDestroyAndroidPlatform(slot.platform);
+        slot.platform = nullptr;
         return;
     }
 
@@ -118,66 +136,72 @@ Java_com_estarx_vulkan_NativeBridge_nativeInit(JNIEnv* env, jclass, jobject surf
         g_app = svk::createApp();
     }
 
-    uint32_t width = 0, height = 0;
-    g_platform->getSurfaceSize(&width, &height);
-    g_renderer->setSize(width, height);
-    SVK_LOGI("android", "engine_started renderer=vulkan width={} height={}", width,
+    uint32_t width = 0;
+    uint32_t height = 0;
+    slot.platform->getSurfaceSize(&width, &height);
+    slot.renderer->setSize(width, height);
+    SVK_LOGI("android", "surface_started surface_id={} width={} height={}", surfaceId, width,
              height);
 }
 
-// Java: NativeBridge.nativeResize(int, int)
 extern "C" JNIEXPORT void JNICALL
-Java_com_estarx_vulkan_NativeBridge_nativeResize(JNIEnv*, jclass, jint width,
-                                                 jint height) {
-    if (g_renderer) {
-        g_renderer->setSize(static_cast<uint32_t>(width),
-                            static_cast<uint32_t>(height));
-    }
-}
-
-// Java Choreographer 的 VSync 回调：由 App 构建本帧内容并提交渲染。
-extern "C" JNIEXPORT void JNICALL
-Java_com_estarx_vulkan_NativeBridge_nativeBeginFrame(JNIEnv*, jclass,
-                                                     jlong frameTimeNanos) {
-    if (!g_app || !g_renderer || !g_platform) {
+Java_com_estarx_vulkan_NativeBridge_nativeResize(JNIEnv*, jclass, jint surfaceId, jint width,
+                                                jint height) {
+    if (!validSurfaceId(surfaceId)) {
         return;
     }
-    uint32_t width = 0, height = 0;
-    g_platform->getSurfaceSize(&width, &height);
-    const double timeSeconds = static_cast<double>(frameTimeNanos) * 1e-9;
-    svk::ui::Canvas canvas;
-    const svk::AppFrameContext context{width, height, timeSeconds};
-    g_app->onFrame(canvas, context);
-    g_renderer->render(canvas);
+    SurfaceSlot& slot = g_surfaces[static_cast<size_t>(surfaceId)];
+    if (slot.renderer) {
+        slot.renderer->setSize(static_cast<uint32_t>(width), static_cast<uint32_t>(height));
+        SVK_LOGD("android", "surface_resized surface_id={} width={} height={}", surfaceId, width,
+                 height);
+    }
 }
 
-// Java: NativeBridge.nativeDestroy()
-// surfaceDestroyed 语义 = 保活挂起：只释放 surface 级资源，引擎级资源
-// （设备/纹理/命令设施）保留，下次 surfaceCreated 由 nativeInit 热恢复。
 extern "C" JNIEXPORT void JNICALL
-Java_com_estarx_vulkan_NativeBridge_nativeDestroy(JNIEnv*, jclass) {
-    if (g_renderer) {
-        g_renderer->suspendSurface();
+Java_com_estarx_vulkan_NativeBridge_nativeBeginFrame(JNIEnv*, jclass, jint surfaceId,
+                                                    jlong frameTimeNanos) {
+    if (!validSurfaceId(surfaceId)) {
+        return;
     }
-    if (g_platform) {
-        svkDestroyAndroidPlatform(g_platform);
-        g_platform = nullptr;
+    SurfaceSlot& slot = g_surfaces[static_cast<size_t>(surfaceId)];
+    if (!g_app || !slot.renderer || !slot.platform) {
+        SVK_LOGW("android", "frame_dropped surface_id={} reason=surface_not_ready", surfaceId);
+        return;
     }
-    SVK_LOGI("android", "engine_suspended renderer=vulkan");
+    uint32_t width = 0;
+    uint32_t height = 0;
+    slot.platform->getSurfaceSize(&width, &height);
+    const double timeSeconds = static_cast<double>(frameTimeNanos) * 1e-9;
+    svk::ui::Canvas canvas;
+    const svk::AppFrameContext context{width, height, timeSeconds,
+                                       static_cast<uint32_t>(surfaceId)};
+    g_app->onFrame(canvas, context);
+    const svk::RenderResult result = slot.renderer->render(canvas);
+    if (result == svk::RenderResult::Failed) {
+        SVK_LOGE("android", "frame_failed surface_id={} width={} height={}", surfaceId, width,
+                 height);
+    }
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_estarx_vulkan_NativeBridge_nativeDestroy(JNIEnv*, jclass, jint surfaceId) {
+    if (!validSurfaceId(surfaceId)) {
+        return;
+    }
+    suspendSlot(g_surfaces[static_cast<size_t>(surfaceId)], surfaceId);
     svk::log::flush();
 }
 
-// Java: NativeBridge.nativeShutdown()
-// Activity.onDestroy 语义 = 真正销毁：全量释放，之后若再启动走完整冷启动。
 extern "C" JNIEXPORT void JNICALL
 Java_com_estarx_vulkan_NativeBridge_nativeShutdown(JNIEnv*, jclass) {
     g_app.reset();
-    delete g_renderer;
-    g_renderer = nullptr;
-    if (g_platform) {
-        svkDestroyAndroidPlatform(g_platform);
-        g_platform = nullptr;
+    for (jint id = 0; id < kSurfaceCount; ++id) {
+        SurfaceSlot& slot = g_surfaces[static_cast<size_t>(id)];
+        slot.renderer.reset();
+        svkDestroyAndroidPlatform(slot.platform);
+        slot.platform = nullptr;
     }
-    SVK_LOGI("android", "engine_stopped renderer=vulkan");
+    SVK_LOGI("android", "engine_stopped surface_count={}", kSurfaceCount);
     svk::log::flush();
 }

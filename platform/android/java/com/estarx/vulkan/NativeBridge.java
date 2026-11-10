@@ -2,12 +2,7 @@ package com.estarx.vulkan;
 
 import android.view.Surface;
 
-/**
- * JNI bridge to the native Vulkan renderer.
- *
- * 薄壳的 Java 侧：只声明 native 方法，实现全部在
- * platform/android/cpp/android_jni_bridge.cpp（静态注册命名约定）。
- */
+/** JNI 薄桥：按调用方给出的 Surface ID 转发生命周期，不包含场景或绘制业务。 */
 public final class NativeBridge {
     static {
         System.loadLibrary("estarx_vulkan");
@@ -15,21 +10,19 @@ public final class NativeBridge {
 
     private NativeBridge() {}
 
-    /** 初始化平台终端 + 文件日志；必须在 surface 创建前调用。 */
     public static native void nativeSetLogDirectory(String directory);
 
-    /** surface 创建就绪时调用（可能多次：退后台重建，native 侧走保活热恢复）。 */
-    public static native void nativeInit(Surface surface);
+    /** surfaceId 由示例固定分配；同一 ID 重复调用表示挂起后的热恢复。 */
+    public static native void nativeInit(int surfaceId, Surface surface);
 
-    /** surface 尺寸确定或变化时调用（首次创建后紧跟一次；旋转也会触发）。 */
-    public static native void nativeResize(int width, int height);
+    public static native void nativeResize(int surfaceId, int width, int height);
 
-    /** Choreographer 的 VSync 回调：由 C++ App 构建本帧内容并提交渲染。 */
-    public static native void nativeBeginFrame(long frameTimeNanos);
+    /** 静态示例只在创建和尺寸变化时调用；连续动画场景可由 VSync 逐帧调用。 */
+    public static native void nativeBeginFrame(int surfaceId, long frameTimeNanos);
 
-    /** surfaceDestroyed 语义 = 保活挂起：只释放 surface 级资源，引擎级资源保留。 */
-    public static native void nativeDestroy();
+    /** 只挂起指定 Surface，不影响同进程中的其他 Surface。 */
+    public static native void nativeDestroy(int surfaceId);
 
-    /** Activity.onDestroy 语义 = 真正销毁，全量释放引擎资源。 */
+    /** Activity 最终销毁时释放全部 Surface 与 App。 */
     public static native void nativeShutdown();
 }
