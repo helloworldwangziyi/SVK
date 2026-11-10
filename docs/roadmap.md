@@ -1,176 +1,309 @@
-# SVK 架构 Roadmap：对齐 Flutter
+# SVK 多 Surface 联动 Roadmap
 
-本文档是项目唯一的架构与演进文档。方向是借鉴 Flutter 的分层、帧管线和职责边界，在现有 C++17/Vulkan 工程上渐进演进，而不是复制整个 Flutter engine。
+> 状态：**基础设置已记录，方案待审阅，尚未开始功能实施**。
+>
+> 本文档是项目唯一架构与演进文档。后续审阅意见、实施偏差、验证结果和阶段状态统一记录在本文档。
 
-## 1. 目标与范围
+## 1. 项目定位
 
-保持现有能力边界：
+SVK 当前目标是完成最小工程基础设置，并验证 Android、鸿蒙的多 Surface 联动能力：
 
-- 平台只支持 Android、鸿蒙，图形后端只使用 Vulkan。
-- App 使用平台无关的 C++ API，最终只呈现到平台提供的 Surface。
-- 平台壳只负责 Surface、生命周期、VSync、输入和系统能力适配。
-- 保留轻量依赖，不引入 Dart VM、Skia，也不整体移植 Impeller 或 Flutter Framework。
+- 使用 C++17/Vulkan，只维护 Android、鸿蒙。
+- 只保留当前三角形、矩形等最小绘制能力，用简单图元表达场景。
+- 平台壳、Surface 生命周期和联动行为保持简单、确定、可测试、易排障。
+- 优先解决 Vulkan Surface、WebView Surface 等多个 Surface 的几何、手势和动画联动。
+- 不做通用 UI 引擎，不在真实适配前引入公共抽象。
+- **Agent 自动生成 App 的功能暂不引入**，待基础能力完成后再单独评审。
 
-目标架构：
+基础绘制提交：`74ec44e refactor: 收敛双端 Vulkan 基础绘制`。
+
+## 2. 明确不做
+
+当前阶段不做：
+
+- 通用 UI 引擎、完整 Widget/Element/RenderObject 三棵树。
+- 字体、文本 shaping、文本编辑和完整文字绘制体系。
+- DisplayList、Layer Tree、Compositor、RasterCache 等通用渲染框架。
+- 具体 K 线、真实行情、交易和网络业务。
+- Agent 自动生成 App、代码生成器、动态 DSL、脚本运行时或插件系统。
+- 视频纹理导入、WebView 纹理化、像素回读或原生位图代绘。
+- Dart、Skia、Impeller、Metal、iOS 和独立 UI/Raster 多线程。
+
+参考 Flutter 和旧项目时，只借鉴 Surface 边界、会话隔离、帧状态、手势仲裁和生命周期，不迁移整套框架。
+
+## 3. 基础工程与场景边界
+
+### 3.1 仓库统一维护部分
+
+- Android、鸿蒙平台壳及构建工程。
+- Vulkan 最小绘制、Swapchain 和 Surface 生命周期。
+- 经过双端验证后再提取的 Surface 身份、帧状态和平台视图协议。
+- 手势仲裁、场景切换、滚动和菜单动画逻辑。
+- 结构化日志、host 测试和验证命令。
+
+### 3.2 示例场景部分
+
+示例放在 `samples/<app>/`，只包含：
+
+- 场景组合与 Surface 类型。
+- 三角形、矩形等占位绘制。
+- Tab、页面顺序和简单交互状态。
+- 确定性测试数据和对应 host 用例。
+
+首版直接编写清晰的 C++ 示例，不引入代码生成器或模板生成系统。公共能力是否值得提取，完全由双端实际适配结果决定。
+
+## 4. 首个场景：K 线结构占位
+
+场景只复刻 K 线页面的 Surface 结构和联动，不绘制真实 K 线，不依赖字体。
+
+### 4.1 Surface 组成
 
 ```text
-┌──────────────── Application ────────────────┐
-│ App / Widget / Element / RenderObject        │  后续按需建设
-└──────────────────────┬───────────────────────┘
-                       │ 布局、绘制
-┌──────────────────────▼───────────────────────┐
-│ Canvas → DisplayList → Layer Tree            │
-│                         ↓ Preroll / Paint     │
-│                      Compositor              │
-│                                              │
-│ Shell：Engine 生命周期、帧编排、线程与任务调度 │
-│                                              │
-│ Vulkan Raster：资源、Swapchain、提交、Present │
-└──────────────────────┬───────────────────────┘
-                       │ VkSurfaceKHR / 系统事件
-┌──────────────────────▼───────────────────────┐
-│ Android Embedder       │ 鸿蒙 Embedder        │
-│ SurfaceView / JNI      │ XComponent / NAPI    │
-└──────────────────────────────────────────────┘
+KLineScene
+├─ HeaderSurface                    Vulkan Surface
+│  └─ 三角形占位                    代替 K 线和行情区域
+├─ TabBar                           最小几何占位，位于 Header 底部
+│  ├─ Web Tab
+│  └─ Native Tab
+├─ ContentPager
+│  ├─ WebSurface                    WebView / ArkWeb
+│  └─ NativeSurface                 Vulkan Surface，三角形占位
+└─ RightMenuSurface                 独立 Vulkan Surface，纯色/三角占位
 ```
 
-核心绘制链路：
+首期只设置两个内容页：一个 WebView Surface、一个原生 Vulkan Surface。两个页面都必须支持 Tab 点击和左右滑动切换。
+
+菜单用于验证额外 Vulkan Surface 与整个联动场景的同步动画，不实现真实菜单业务。
+
+### 4.2 初始布局
+
+- HeaderSurface 位于上方，显示当前三角形即可。
+- TabBar 位于 Header 底部，使用颜色、矩形或三角区分选中状态。
+- 当前内容 Surface 位于 Tab 下方并填满剩余视口。
+- 非当前内容页在静止状态隐藏，但会话是否保留必须由场景状态明确控制。
+- 顶部右侧提供最小菜单点击区域，不绘制文字图标。
+
+## 5. 交互需求
+
+### 5.1 Tab 与左右滑动切换
+
+- 点击 Tab 切换到对应 WebView 或原生 Vulkan 内容。
+- 在内容区域水平滑动，可以切换到相邻内容页。
+- 切换过程中，当前页与目标页使用同一个进度和位移函数。
+- 切换完成后才隐藏离场页；切换被取消时，两页必须回到一致的原始状态。
+- 页面切换不能意外重置外层纵向偏移、WebView 文档或原生内容滚动位置。
+- 同一时刻只能有一个活动内容接收纵向滚动。
+
+水平手势与垂直手势在超过系统触摸阈值后进行方向锁定。一旦锁定，本段手势不再切换方向，避免斜滑时页面切换与纵向滚动同时发生。
+
+### 5.2 上下滑动与 Tab 置顶
+
+纵向联动分为两个阶段：
 
 ```text
-App 构建绘制内容
-  → DisplayList 记录
-  → Layer Tree 组织
-  → Compositor 遍历
-  → Vulkan 光栅化
-  → Swapchain Present 到平台 Surface
+阶段 A：Header 尚未完全移出
+  → 外层内容向上滚动
+  → Header 与 Tab 一起移动
+  → 直到 Tab 到达视口顶部
+
+阶段 B：Tab 已置顶
+  → 当前 WebView Surface 或原生 Vulkan Surface 继续内部滚动
+  → Tab 保持置顶
 ```
 
-Shell 负责协调上述过程，不负责具体 App 绘制；Embedder 负责系统事件翻译，不包含 App 业务。
+反向手势：
 
-## 2. 当前基础与差距
+- 当前内容未回到自身顶部时，先滚动当前内容。
+- 当前内容已经到顶后继续下拉，外层内容向下滚动，重新露出 Header。
+- 切换 Web/Native 页后，保留并恢复各页自己的内容偏移，不能从错误偏移开始。
 
-现有对应关系：
+原生 Vulkan 内容不需要通用 ScrollView，只需让三角形或其他占位图元按 `contentOffset` 做确定位移，以验证与 WebView 相同的滚动行为。
 
-- `IPlatform`、Android JNI、鸿蒙 NAPI：对应简化的 Embedder 边界。
-- `IRasterSurface`、`Renderer`、`gpu/vulkan/`：对应光栅化与 Surface 呈现。
-- `ui::Canvas`：当前直接收集 CPU 顶点与裁剪批次，尚不是 DisplayList。
-- `IApp::onFrame()`：当前由平台直接驱动，尚无独立 Shell 和帧管线。
+### 5.3 接缝处不抖动
 
-主要缺口：
+这是核心验收要求，不是可选优化。
 
-- 没有可记录、回放的 DisplayList。
-- 没有 Layer Tree、Compositor 和统一的 Preroll/Paint 遍历。
-- 没有 Widget、Element、RenderObject 及布局协议。
-- 没有统一的输入分发、动画和帧调度模型。
-- 所有引擎方法目前仍在同一个线程顺序调用。
+实现必须遵守：
 
-## 3. 架构约束
+1. **单一纵向协调逻辑**：同一滚动偏移只能有一个写入者，禁止外层与 WebView 竞争修改状态。
+2. **整段手势确定归属**：滚动、方向锁定和页面切换不能在同一段手势里反复争夺事件。
+3. **同一次画面更新只计算一次状态**：外层偏移、内容偏移、Surface 几何和可见性不能分别推进。
+4. **各 Surface 使用相同状态**：WebView 与 Vulkan 不得一个使用当前偏移、另一个仍使用上一偏移。
+5. **惯性只能有一个来源**：禁止 WebView fling 与场景 fling 叠加。
+6. **旧回调不得覆盖新状态**：Surface 销毁或替换后，迟到事件必须失效。
+7. **接缝专项验证**：覆盖慢拖、快拖、惯性、到顶回拉和页面切换，不能只用静态截图判断。
 
-1. 保持公共边界 `App → core ← platform`，core 不依赖平台界面 API，platform 不反向依赖具体 App。
-2. core 内部职责单向拆分：绘制描述不依赖 Vulkan，Layer/Compositor 不依赖 Android 或鸿蒙，Embedder 不感知 Widget 和 App 业务。
-3. Vulkan 只位于光栅化实现中；DisplayList、Layer 和布局层不得暴露 Vulkan 类型。
-4. 先单线程正确运行，再依据性能数据拆分 UI/Raster 线程；不在现有公共方法中零散加锁。
-5. 每阶段都保持示例可运行、现有 Surface 生命周期可用，不做一次性重写。
-6. 平台无关逻辑放在 host 测试中；每阶段结束同时验证 Android、鸿蒙示例。
-7. 架构决策、完成状态和后续调整统一更新本文档，不新增分散的架构文档。
+如果 WebView 自滚与外层滚动在目标平台上无法稳定衔接，应暂停扩展功能，对比“统一驱动内容偏移”和“平台原生嵌套滚动单轴”方案。不得通过隐藏空白、遮盖接缝或降低验收场景来宣称完成。
 
-## 4. 分阶段实施
+### 5.4 右侧菜单推出动画
 
-### P0：稳定边界与回归基线
+- 点击右上菜单区域，RightMenuSurface 从屏幕右侧进入。
+- 菜单最终宽度取屏幕宽度的约 `1/4`，首版可固定为 `drawerWidth = sceneWidth × 0.25`。
+- 菜单进入的同时，整个 KLineScene（Header、Tab、当前内容 Surface）同步向左移动相同的 `drawerWidth × progress`。
+- 菜单与主场景共用同一动画起止时间、VSync 时间戳和 easing，不分别启动原生动画。
+- 关闭时使用同一状态模型的反向过程，不重新创建整个场景。
+- 动画期间禁止内容页继续接收滚动或切换手势；菜单何时可交互必须由明确状态决定。
+- 旋转、尺寸变化或 Surface 重建时，根据当前 drawer progress 重新计算几何，不能跳回初始位置。
 
-目标：在改变内部实现前固定现有行为。
+位移关系：
 
-- 明确 App、Surface、Renderer 和平台桥接的所有权及调用顺序。
-- 固定 Surface 创建、尺寸变化、挂起、恢复和销毁的状态转换。
-- 为 Canvas 的图元、变换和裁剪补充 host 回归测试。
-- 记录三角形示例在两端的当前表现，作为后续重构基线。
+```text
+D = sceneWidth × 0.25
+p = 统一动画进度，关闭为 0，打开为 1
 
-完成标准：host 测试通过，两端示例构建和运行通过，行为与重构前一致。
+sceneTranslationX = -D × p
+menuX = sceneWidth - D × p
+```
 
-### P1：Canvas 与 DisplayList
+所有参与动画的 Surface 必须在动画开始前完成创建并达到可绘制状态。首次 WebView/Vulkan 初始化不能计入动画帧，以免冷启动阻塞被误当作动画抖动。
 
-目标：把“App 如何描述绘制”与“Vulkan 如何执行绘制”分开。
+## 6. 基础原则：先适配，后抽象
 
-- 引入 DisplayList Builder，将 Canvas 调用记录为可回放指令。
-- 首批指令覆盖现有三角形、矩形、变换、裁剪和状态保存/恢复。
-- DisplayList 记录完成后保持不可变，由光栅化阶段统一消费。
-- Renderer 不再接收 App 的即时顶点写入，只负责回放和资源执行。
-- 参考 Flutter DisplayList 的接口和指令组织，不复制其无关后端能力。
+Surface 联动是项目最基础的能力。**在 Android、鸿蒙分别适配并通过真实设备验收之前，不引入 `SurfaceCoordinator`、`SceneFrame`、通用 Session 或其他公共抽象。** 这些名称只能作为后续候选，不能提前成为代码结构。
 
-完成标准：host 覆盖指令记录、回放、状态恢复和裁剪；两端示例画面保持一致。
+前期允许平台适配代码保持具体，允许两端实现暂时重复。先弄清平台真实能力和限制，再决定哪些行为可以公共化，避免做出只适合 Android 或只适合鸿蒙的接口。
 
-### P2：Layer Tree 与 Compositor
+### 6.1 两端必须先验证的事实
 
-目标：以 Layer 组织绘制，建立 Flutter 风格的场景遍历。
+Android 直接使用 SurfaceView、WebView、Choreographer 和 MotionEvent 验证：
 
-- 引入 Container、Transform、Clip、Opacity 和 DisplayList Layer。
-- 建立 Preroll/Paint 两阶段遍历，统一计算变换、裁剪和绘制范围。
-- Compositor 负责遍历 Layer Tree，Vulkan Renderer 只执行最终绘制。
-- 首版不加入 RasterCache，避免为尚无性能问题的路径增加离屏渲染。
+- 多 Surface 的创建、销毁、Z 序、遮挡、裁剪和尺寸变化。
+- Vulkan Surface 与 WebView 平移时的实际帧表现。
+- WebView 滚动位置读取、内容定位、惯性控制和事件暂存/重放是否满足接缝要求。
+- 触摸方向锁定、前后台、Surface 重建及旧回调失效。
+- 所有回调所在线程、原生布局生效时机及像素单位。
 
-完成标准：嵌套 transform/clip/opacity 用例正确；host 覆盖树遍历和状态隔离；两端示例通过。
+鸿蒙直接使用 XComponent、ArkWeb、DisplaySync 和 ArkUI 手势验证：
 
-### P3：Shell 与帧管线
+- 多 XComponent 与 ArkWeb 的层级、裁剪、平移和生命周期。
+- ArkWeb controller 延迟附着、滚动事件、内容定位和 overscroll 行为。
+- priority/parallel gesture、合成触摸、Cancel 补偿及手势独占。
+- DisplaySync 与原生视图更新的时序、px/vp 转换和前后台恢复。
 
-目标：把平台直驱调用改为统一的 Engine/Shell 帧编排。
+### 6.2 抽象前必须满足的条件
 
-- 由 Shell 统一管理 App、Compositor、RasterSurface 和平台接口的生命周期。
-- 建立 VSync → BeginFrame → 构建场景 → 光栅化 → Present 的明确流程。
-- 增加按需请求帧和动画回调，避免无内容变化时持续绘制。
-- 统一两端 Surface 挂起、恢复、尺寸变化时的帧状态。
-- 首版仍保持单线程；只有性能分析证明需要时，才设计独立 UI/Raster TaskRunner 和帧传递管线。
+只有以下条件全部成立，才允许提取公共协议：
 
-完成标准：两端使用同一帧协议；生命周期切换无重复提交或失效 Surface 绘制；按需帧和动画用例通过。
+1. 两端静态几何、层级和生命周期都已跑通。
+2. 两端横向切换、Tab 置顶、内容滚动和到顶回拉都已通过设备验收。
+3. 两端右侧菜单同步推出动画都没有可复现的抖动。
+4. 已用日志和时间线定位过至少一轮真实接缝或时序问题，而不是仅凭静态画面判断。
+5. 已明确列出两端共有行为、平台差异和无法统一的语义。
 
-### P4：统一输入与事件分发
+抽象只能从已验证的共有行为中提取。平台差异继续留在各自适配实现中，不得为了接口统一而伪造相同能力。
 
-目标：让输入像 Flutter 一样从 Embedder 进入 Engine，再由 UI 层处理。
+### 6.3 提前固定的只有行为要求
 
-- 定义平台无关的 PointerEvent，统一触摸、按下、移动、抬起和取消语义。
-- Android、鸿蒙只转换坐标和系统事件，不实现 App 手势业务。
-- Shell 负责事件注入，UI 层负责命中测试、事件分发和手势识别。
-- 明确输入与帧调度、Surface 生命周期之间的顺序。
+- 同一时刻一个滚动偏移只能有一个写入者。
+- 同一次画面更新所涉及的 Surface 必须来自同一场景状态，不得混用不同动画进度。
+- 手势方向、滚动阶段、页面切换和菜单动画必须有确定状态。
+- 迟到的回调不能修改已销毁或已替换的 Surface。
+- 保留现有 `Canvas → IRasterSurface → Vulkan Present`，不增加 RHI 或通用渲染框架。
+- 正式示例场景 API 不暴露平台对象；适配探针可以暂时直接操作平台 API，但不能直接变成公共 App API。
 
-完成标准：相同输入在两端产生一致的标准事件流；命中测试、取消和生命周期中断用例通过。
+## 7. 分阶段实施
 
-### P5：声明式 UI 与布局
+所有阶段均未开始。阶段 0 至阶段 3 只做具体适配和行为验证，不提取公共抽象。每阶段完成后先展示结果和验证证据，不主动提交。
 
-目标：在稳定的绘制和帧管线之上，建立简化版 Flutter Framework 分层。
+### 阶段 0：Android、鸿蒙直接适配探针
 
-- Widget：不可变配置，不直接执行 Vulkan 绘制。
-- Element：挂载、更新、重建和卸载，管理 Widget 与 RenderObject 的关系。
-- RenderObject：布局、绘制和命中测试，通过 Canvas 生成 DisplayList。
-- 引入 BoxConstraints、父级约束和 dirty 标记，按需触发布局与重绘。
-- 先实现最小组件集合，再依据真实 App 需求扩展，不追求一次性覆盖 Flutter Widget 库。
+- 使用现有平台 API 和最小三角形绘制，分别创建 Vulkan Surface、WebView/ArkWeb 和额外 Vulkan Surface。
+- 直接验证几何、层级、平移、滚动事件、线程、生命周期和单位转换。
+- 记录两端实际调用时序和能力差异，不定义通用协调器或帧协议类。
+- 探针代码与正式示例保持可识别边界，不把临时代码直接沉淀为公共 API。
 
-完成标准：同一声明式组件树可完成更新、布局、绘制和输入；host 覆盖重建、局部重布局及命中测试；两端示例通过。
+验收：两端都有可运行的最小探针和实测结论；明确哪些滚动、动画及生命周期行为可以控制，哪些仍存在平台障碍。
 
-## 5. 后续独立评审项
+### 阶段 1：Android 具体 K 线联动场景
 
-以下能力不进入当前默认范围，需要真实需求、依赖评估和单独设计后再排期：
+- 在 Android 示例中直接组合 Header Vulkan、Tab、WebView、Native Vulkan 和右菜单 Surface。
+- 完成 Tab 点击、左右切换、Tab 置顶、内容滚动和到顶回拉。
+- 完成 1/4 屏宽右菜单与主场景同步推出。
+- 使用必要的平台专用手势、滚动和动画实现，不提取跨平台接口。
+- 保存排障日志、接缝时间线和设备验证结果。
 
-- 字体加载、文字 shaping、glyph atlas 和段落布局。
-- 图片解码、纹理上传和跨帧资源缓存。
-- Semantics、无障碍、Platform View 和平台通道。
-- RasterCache、离屏输出、像素回读及其他图形后端。
-- 独立 UI/Raster 线程、多引擎和 Isolate 等复杂运行模型。
+验收：Android 全部场景行为通过，接缝和菜单没有可复现的抖动、双滚动或状态跳变。
 
-## 6. 阶段验收与参考
+### 阶段 2：鸿蒙具体 K 线联动场景
 
-每个阶段必须依次满足：
+- 按相同场景需求使用 XComponent、ArkWeb、DisplaySync 和 ArkUI 手势直接实现。
+- 不照搬 Android 的内部实现，只对照外部行为和验收场景。
+- 完成 Tab、横纵切换、滚动接缝、右菜单、前后台和 Surface 重建。
+- 记录 ArkWeb 和 XComponent 特有的限制与解决方案。
 
-1. 对应 host 测试和 `ctest` 通过。
-2. Android 三角形示例构建、运行和生命周期验证通过。
-3. 鸿蒙三角形示例构建、运行和生命周期验证通过。
-4. 未把平台类型泄漏到 core，未把 App 业务下沉到 platform。
-5. 更新本文档中的完成状态、偏差和下一阶段前置条件。
+验收：鸿蒙全部场景行为通过，接缝和菜单没有可复现的抖动、双滚动或状态跳变。
 
-Flutter 参考源码根目录：`third_party/flutter-engine/engine/src/flutter/`。
+### 阶段 3：双端行为对照与抽象评审
 
-- DisplayList：`display_list/dl_builder.h`、`display_list/dl_canvas.h`、`display_list/dl_op_records.h`。
-- Layer/Compositor：`flow/layers/`、`flow/compositor_context.{h,cc}`。
-- 帧编排：`shell/common/animator.{h,cc}`、`shell/common/pipeline.{h,cc}`。
-- 线程模型：`fml/task_runner.{h,cc}`、`fml/raster_thread_merger.{h,cc}`。
-- Vulkan 参考：`impeller/renderer/backend/vulkan/`。
+- 用相同测试数据和操作序列对照两端行为。
+- 列出共有状态、平台专用状态、共有事件和平台专用事件。
+- 评审哪些差异应保留在平台壳，哪些场景状态才值得公共化。
+- 此阶段仍不写公共抽象，先形成最小接口候选和迁移范围。
 
-参考上游的职责划分和协议设计，不按目录整体搬运代码。
+验收：有两端实测证据支撑的接口清单；不存在为了复用而牺牲滚动或动画稳定性的条目。
+
+### 阶段 4：提取最小公共能力并回归
+
+- 仅提取阶段 3 已证明共有的状态、事件和协议。
+- 公共 API 保持少量、明确、平台无关，不引入通用引擎或完整 Widget 体系。
+- 将 Android、鸿蒙具体实现逐步接到公共协议，平台差异仍留在适配层。
+- 每次迁移后重复全部联动、接缝、菜单和生命周期验收。
+
+验收：抽象后行为与抽象前一致，没有任何性能或稳定性回退；若出现回退，先撤销该抽象而不是修改验收标准。
+
+### 阶段 5：基础场景固化与完整回归
+
+- 将验证后的场景整理为小而明确的 C++ 示例。
+- 固定场景 API、日志字段、测试数据和目录约定。
+- host 覆盖可平台无关验证的状态和边界，两端重新完成构建及设备验收。
+- 记录仍未解决的接缝、性能或平台差异，不以 host 测试代替设备结论。
+
+验收：示例不依赖临时探针或重复的平台联动实现，基础场景可重复构建和验证。
+
+## 8. 日志与排障要求
+
+除 `AGENTS.md` 的通用要求外，本场景必须能按帧关联：
+
+```text
+frame_id
+surface_id / surface_generation
+session_id
+gesture_owner
+outer_offset / content_offset
+page_progress / drawer_progress
+visible / interactive
+result / reason
+```
+
+上述字段首先是排障协议，不代表提前建立同名公共类。
+
+- 生命周期、动画开始/结束和异常使用合适级别记录。
+- 正常逐帧日志只走 Verbose，并支持去重或采样。
+- 手势归属变化、滚动阶段变化和旧帧拒绝使用 Debug。
+- 出现接缝问题时，日志必须能证明同一帧各 Surface 收到的偏移是否一致。
+- 适配阶段必须保留原始时间戳、平台回调顺序和实际单位，不能只保留抽象后的状态。
+- 不记录完整 HTML 或无界数据负载。
+
+## 9. 当前验收边界
+
+只有以下条件同时满足，首个 K 线占位场景才算完成：
+
+1. 所有可见自绘内容仍只是最小三角形/矩形，不引入字体和真实 K 线。
+2. Tab 与左右滑动均能切换 WebView 和原生 Vulkan Surface。
+3. 上下滑动可先让 Tab 置顶，再继续滚动当前内容，反向过程正确。
+4. 接缝处慢拖、快滑和惯性没有可复现的抖动或双滚动。
+5. 右菜单以约 1/4 屏宽进入，同时推动整个联动场景，动画无抖动。
+6. Surface 重建、页面切换、菜单动画和前后台恢复不会使用旧会话或旧帧。
+7. 上述行为先由两端具体实现通过，再经过公共化后的完整回归。
+8. host 测试通过，Android、鸿蒙分别完成构建和相关设备验证。
+
+## 10. 审阅与执行记录
+
+- 已确认当前方向：先完成基础设置和真实多 Surface 适配，不做通用引擎。
+- 已确认暂缓范围：Agent 自动生成 App 功能暂不引入，后续单独评审。
+- 已确认绘制范围：保留最小绘制，字体和真实 K 线延后。
+- 已确认首个场景：K 线结构、双内容 Surface、纵横联动和右侧菜单动画。
+- 已确认基础原则：Surface 联动先于抽象，必须先完成两端真实适配和验收。
+- 待审阅：平台直接探针、双端具体实现后再提取最小公共能力的实施顺序。
+- 实施批准：待记录。
+- 阶段结果：待记录。
