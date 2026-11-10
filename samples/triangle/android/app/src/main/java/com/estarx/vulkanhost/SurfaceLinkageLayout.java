@@ -499,6 +499,17 @@ public final class SurfaceLinkageLayout extends FrameLayout {
         if (pagerAnimator != null) {
             pagerAnimator.cancel();
         }
+        if (Math.abs(targetPage - activePage) > 1) {
+            // 跨多个 Tab 直接交换首尾页面，不让中间 WebView/Surface 逐页穿过。
+            pagerPosition = targetPage;
+            activePage = targetPage;
+            applyPagerState();
+            updateTabState();
+            Log.i(TAG, "event=page_changed reason=non_adjacent page=" + activePage
+                    + " outer_offset=" + outerOffset
+                    + " content_offset=" + activeContentOffset());
+            return;
+        }
         final float start = pagerPosition;
         final float target = targetPage;
         pagerAnimator = ValueAnimator.ofFloat(start, target);
