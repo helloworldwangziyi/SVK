@@ -41,8 +41,13 @@ struct Index {
   }
 
   private selectPage(index: number): void {
-    this.swiperController.changeIndex(index, true);
-    hilog.info(DOMAIN, TAG, `[event=page_change_requested page=${index}]`);
+    const animate = Math.abs(index - this.activePage) === 1;
+    // 先同步目标页，Tab 连续滑动不依赖 onAnimationEnd 是否按预期回调；
+    // 跨多页直接到位，避免中间 WebView/Surface 逐个穿过。
+    this.activePage = index;
+    this.swiperController.changeIndex(index, animate);
+    hilog.info(DOMAIN, TAG,
+      `[event=page_change_requested page=${index} animate=${animate}]`);
   }
 
   private animateDrawer(target: number): void {
@@ -122,7 +127,7 @@ struct Index {
             }
             .width('100%')
             .height(this.contentHeight())
-            .gesture(this.horizontalTabGesture())
+            .priorityGesture(this.horizontalTabGesture())
 
             Swiper(this.swiperController) {
               this.webPage(referenceWebUrl('notice'), this.noticeController, 0)
@@ -152,8 +157,11 @@ struct Index {
             .indicator(false)
             .cachedCount(4)
             .duration(220)
-            // 网页内部可能有自己的横向场景，只有绿色 Vulkan 页允许 Swiper 接管。
-            .disableSwipe(this.activePage !== 4 || this.drawerProgress > 0)
+            // changeIndex 始终可用，只有菜单动画禁滑。Web 页让 Swiper 自身触摸
+            // 透明，子 ArkWeb 继续接收横向手势；绿色 Vulkan 页才由 Swiper 接管。
+            .disableSwipe(this.drawerProgress > 0)
+            .onTouchIntercept((_event: TouchEvent): HitTestMode =>
+              this.activePage === 4 ? HitTestMode.Default : HitTestMode.Transparent)
             .onAnimationEnd((index: number) => {
               this.activePage = index;
               hilog.info(DOMAIN, TAG, `[event=page_changed page=${index}]`);
@@ -183,7 +191,7 @@ struct Index {
         .height(this.topBarHeight)
         .backgroundColor(Color.White)
         .position({ x: 0, y: 0 })
-        .gesture(this.horizontalTabGesture())
+        .priorityGesture(this.horizontalTabGesture())
       }
       .width('100%')
       .height('100%')
