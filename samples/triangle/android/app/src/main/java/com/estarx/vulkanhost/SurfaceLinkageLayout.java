@@ -28,8 +28,8 @@ import java.util.ArrayList;
  * Android 专用多 Surface 联动探针，不是公共 UI 抽象。
  *
  * 首屏 Header 与底部内容都占满 TopBar 下的视口，Tab 覆盖 Header 底边，
- * WebView 初始位于屏幕外。纵向只由本类修改外层/Web/Native 偏移；网页横向手势留给 Chromium，Header、
- * Tab 和绿色 Vulkan 区域的横向手势才切换页面。菜单与页面动画各自只用一个进度。
+ * WebView 初始位于屏幕外。纵向只由本类修改外层/Web/Native 偏移；WebView、Header、
+ * Tab 和绿色 Vulkan 区域的横向手势都用于切换页面。菜单与页面动画各自只用一个进度。
  */
 public final class SurfaceLinkageLayout extends FrameLayout {
     private static final String TAG = "SVK-SurfaceProbe";
@@ -42,7 +42,6 @@ public final class SurfaceLinkageLayout extends FrameLayout {
     private static final int GESTURE_NONE = 0;
     private static final int GESTURE_HORIZONTAL = 1;
     private static final int GESTURE_VERTICAL = 2;
-    private static final int GESTURE_WEB_HORIZONTAL = 3;
 
     private static final String[] WEB_PATHS = {"notice", "relevance", "rank", "f10"};
     private static final String[] TAB_TITLES = {"资讯", "关联", "排行", "F10", "绿色"};
@@ -74,7 +73,6 @@ public final class SurfaceLinkageLayout extends FrameLayout {
     private int drawerWidth;
     private int gesture = GESTURE_NONE;
     private int activePage = 0;
-    private boolean touchStartedOnWeb;
     private float downX;
     private float downY;
     private float lastY;
@@ -302,7 +300,6 @@ public final class SurfaceLinkageLayout extends FrameLayout {
             downY = event.getY();
             lastY = downY;
             startPagerPosition = pagerPosition;
-            touchStartedOnWeb = isTouchInsideActiveWeb(event);
             gesture = GESTURE_NONE;
         }
         if (event.getActionMasked() == MotionEvent.ACTION_MOVE
@@ -313,11 +310,7 @@ public final class SurfaceLinkageLayout extends FrameLayout {
                 stopFling();
                 startPagerPosition = pagerPosition;
                 final boolean horizontal = Math.abs(dx) > Math.abs(dy);
-                if (horizontal && touchStartedOnWeb) {
-                    gesture = GESTURE_WEB_HORIZONTAL;
-                } else {
-                    gesture = horizontal ? GESTURE_HORIZONTAL : GESTURE_VERTICAL;
-                }
+                gesture = horizontal ? GESTURE_HORIZONTAL : GESTURE_VERTICAL;
                 Log.d(TAG, "event=gesture_lock owner=" + gestureName(gesture));
             }
         }
@@ -326,25 +319,9 @@ public final class SurfaceLinkageLayout extends FrameLayout {
         return super.dispatchTouchEvent(event);
     }
 
-    private boolean isTouchInsideActiveWeb(MotionEvent event) {
-        if (activePage >= WEB_PAGE_COUNT) {
-            return false;
-        }
-        View webView = webViews.get(activePage);
-        if (webView.getWidth() == 0 || webView.getHeight() == 0) {
-            return false;
-        }
-        final int[] location = new int[2];
-        webView.getLocationOnScreen(location);
-        final float x = event.getRawX();
-        final float y = event.getRawY();
-        return x >= location[0] && x < location[0] + webView.getWidth()
-                && y >= location[1] && y < location[1] + webView.getHeight();
-    }
-
     @Override
     public boolean onInterceptTouchEvent(MotionEvent event) {
-        if (drawerProgress > 0.0f || gesture == GESTURE_WEB_HORIZONTAL) {
+        if (drawerProgress > 0.0f) {
             return false;
         }
         return gesture == GESTURE_HORIZONTAL || gesture == GESTURE_VERTICAL;
@@ -626,7 +603,7 @@ public final class SurfaceLinkageLayout extends FrameLayout {
         super.onDetachedFromWindow();
     }
 
-    /** 禁止 Chromium 抢先消费竖滚；横向始终交给网页，竖向偏移只由外层协调逻辑写入。 */
+    /** 只防止 Chromium 抢先消费竖滚；横向由父容器拦截并切换 Tab。 */
     private static final class LinkedWebView extends WebView {
         private float downX;
         private float downY;
@@ -651,6 +628,14 @@ public final class SurfaceLinkageLayout extends FrameLayout {
         }
 
         @Override
+        public void requestDisallowInterceptTouchEvent(boolean disallowIntercept) {
+            if (!disallowIntercept) {
+                super.requestDisallowInterceptTouchEvent(false);
+            }
+            // Chromium 不得阻断父容器拦截；横滑切 Tab、竖滚由场景统一协调。
+        }
+
+        @Override
         public boolean performClick() {
             return super.performClick();
         }
@@ -667,7 +652,6 @@ public final class SurfaceLinkageLayout extends FrameLayout {
     private static String gestureName(int owner) {
         if (owner == GESTURE_HORIZONTAL) return "horizontal";
         if (owner == GESTURE_VERTICAL) return "vertical";
-        if (owner == GESTURE_WEB_HORIZONTAL) return "web_horizontal";
         return "none";
     }
 }
