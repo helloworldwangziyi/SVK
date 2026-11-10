@@ -1,6 +1,6 @@
 # SVK 多 Surface 联动 Roadmap
 
-> 状态：**基础设置已记录，方案待审阅，尚未开始功能实施**。
+> 状态：**双端场景探针已实现并通过构建，真实设备联动验收尚未完成**。
 >
 > 本文档是项目唯一架构与演进文档。后续审阅意见、实施偏差、验证结果和阶段状态统一记录在本文档。
 
@@ -54,47 +54,54 @@ SVK 当前目标是完成最小工程基础设置，并验证 Android、鸿蒙�
 
 ## 4. 首个场景：K 线结构占位
 
-场景只复刻 K 线页面的 Surface 结构和联动，不绘制真实 K 线，不依赖字体。
+场景只复刻 K 线页面的 Surface 结构和联动，不绘制真实 K 线，不依赖 Vulkan 字体能力。
 
 ### 4.1 Surface 组成
 
 ```text
 KLineScene
-├─ HeaderSurface                    Vulkan Surface
-│  └─ 三角形占位                    代替 K 线和行情区域
-├─ TabBar                           最小几何占位，位于 Header 底部
-│  ├─ Web Tab
-│  └─ Native Tab
+├─ TopBar                           固定原生顶栏，包含右菜单入口
+├─ HeaderSurface                    红色 Vulkan Surface，TopBar 下完整视口
+├─ TabBar                           位于 Header 底部，初始在屏幕外
+│  ├─ 资讯                          WebView / ArkWeb
+│  ├─ 关联                          WebView / ArkWeb
+│  ├─ 排行                          WebView / ArkWeb
+│  ├─ F10                           WebView / ArkWeb
+│  └─ 绿色                          绿色 Vulkan Surface
 ├─ ContentPager
-│  ├─ WebSurface                    WebView / ArkWeb
-│  └─ NativeSurface                 Vulkan Surface，三角形占位
-└─ RightMenuSurface                 独立 Vulkan Surface，纯色/三角占位
+│  ├─ 4 个独立 WebSurface           均为 TopBar 下完整视口大小
+│  └─ NativeSurface                 绿色 Vulkan，大小与 WebSurface 相同
+└─ RightMenuSurface                 独立黄色 Vulkan Surface
 ```
 
-首期只设置两个内容页：一个 WebView Surface、一个原生 Vulkan Surface。两个页面都必须支持 Tab 点击和左右滑动切换。
+底部内容共五页：四个 WebView 页面和一个绿色 Vulkan 页面。四个网页地址使用参考项目的 `notice / relevance / rank / f10` 路径及相同查询参数格式；原项目“明细”是本地 HTML，本场景不使用该入口。
+
+所有页面支持 Tab 点击切换。网页内部的横向手势不用于 Tab 切换；Header、TopBar、Tab 和绿色 Vulkan 页面提供横向切换入口。
 
 菜单用于验证额外 Vulkan Surface 与整个联动场景的同步动画，不实现真实菜单业务。
 
 ### 4.2 初始布局
 
-- HeaderSurface 位于上方，显示当前三角形即可。
-- TabBar 位于 Header 底部，使用颜色、矩形或三角区分选中状态。
-- 当前内容 Surface 位于 Tab 下方并填满剩余视口。
-- 非当前内容页在静止状态隐藏，但会话是否保留必须由场景状态明确控制。
-- 顶部右侧提供最小菜单点击区域，不绘制文字图标。
+- TopBar 固定在上方，HeaderSurface 占满 TopBar 下方的完整视口。
+- TabBar 覆盖在 HeaderSurface 底边，初始即可见；WebView 初始纵坐标等于屏幕高度，完全位于屏幕外，可直接上拉进入。
+- 每个底部 WebView 与 HeaderSurface 一样，都是 TopBar 下完整视口大小；Tab 覆盖在 Header 上，不压缩 Header 或底部页面的声明高度。
+- 外层最大上拉距离为 `Header 高 - Tab 高`，这样 Tab 到达 TopBar 下方时，WebView 恰好位于 Tab 下方。
+- 非当前内容页在静止状态位于横向屏外，但各页文档和滚动位置需要保留。
+- Header 为红色，右菜单为黄色，底部原生内容为绿色，便于直接观察系统 Surface 的层级与位移。
 
 ## 5. 交互需求
 
 ### 5.1 Tab 与左右滑动切换
 
-- 点击 Tab 切换到对应 WebView 或原生 Vulkan 内容。
-- 在内容区域水平滑动，可以切换到相邻内容页。
+- 点击五个 Tab 中的任意一个，切换到对应 WebView 或绿色 Vulkan 内容。
+- **网页内部的横向手势不拦截、不触发 Tab 切换**，因为网页可能具有自己的横向列表、图表或导航。
+- Header、TopBar、Tab 等非网页区域，以及绿色 Vulkan 页面，可以响应横向手势切换相邻 Tab。
 - 切换过程中，当前页与目标页使用同一个进度和位移函数。
-- 切换完成后才隐藏离场页；切换被取消时，两页必须回到一致的原始状态。
-- 页面切换不能意外重置外层纵向偏移、WebView 文档或原生内容滚动位置。
-- 同一时刻只能有一个活动内容接收纵向滚动。
+- 切换被取消时，两页必须回到一致的原始状态；静止后非当前页位于横向屏外。
+- 页面切换不能意外重置外层纵向偏移、WebView 文档或任一页面的内容滚动位置。
+- 同一时刻只能有一个活动内容接收纵向滚动；网页横向偏移由网页自己保留。
 
-水平手势与垂直手势在超过系统触摸阈值后进行方向锁定。一旦锁定，本段手势不再切换方向，避免斜滑时页面切换与纵向滚动同时发生。
+水平手势与垂直手势在超过系统触摸阈值后进行方向锁定。一旦锁定，本段手势不再切换方向；从网页内部开始的横向手势直接锁定给网页，避免斜滑时网页与 Tab 切换同时发生。
 
 ### 5.2 上下滑动与 Tab 置顶
 
@@ -104,20 +111,21 @@ KLineScene
 阶段 A：Header 尚未完全移出
   → 外层内容向上滚动
   → Header 与 Tab 一起移动
-  → 直到 Tab 到达视口顶部
+  → 底部内容从屏幕外逐渐被拉入
+  → 直到 Tab 到达固定 TopBar 下方
 
-阶段 B：Tab 已置顶
-  → 当前 WebView Surface 或原生 Vulkan Surface 继续内部滚动
-  → Tab 保持置顶
+阶段 B：Tab 已停在 TopBar 下方
+  → 当前 WebView Surface 或绿色 Vulkan Surface 继续内部滚动
+  → TopBar 与 Tab 都保持不动
 ```
 
 反向手势：
 
 - 当前内容未回到自身顶部时，先滚动当前内容。
-- 当前内容已经到顶后继续下拉，外层内容向下滚动，重新露出 Header。
+- 当前内容已经到顶后继续下拉，外层内容向下滚动，重新露出 Header，底部内容回到屏幕外。
 - 切换 Web/Native 页后，保留并恢复各页自己的内容偏移，不能从错误偏移开始。
 
-原生 Vulkan 内容不需要通用 ScrollView，只需让三角形或其他占位图元按 `contentOffset` 做确定位移，以验证与 WebView 相同的滚动行为。
+绿色 Vulkan 内容不需要通用 ScrollView，只需让纯色 Surface 按 `contentOffset` 做确定位移，以验证与 WebView 相同的滚动行为。
 
 ### 5.3 接缝处不抖动
 
@@ -203,7 +211,7 @@ Android 直接使用 SurfaceView、WebView、Choreographer 和 MotionEvent 验�
 
 ## 7. 分阶段实施
 
-所有阶段均未开始。阶段 0 至阶段 3 只做具体适配和行为验证，不提取公共抽象。每阶段完成后先展示结果和验证证据，不主动提交。
+阶段 0 至阶段 2 已形成双端具体探针实现，但尚未完成真实设备联动验收，不能视为阶段完成。阶段 0 至阶段 3 只做具体适配和行为验证，不提取公共抽象。每阶段完成后先展示结果和验证证据，不主动提交。
 
 ### 阶段 0：Android、鸿蒙直接适配探针
 
@@ -288,12 +296,12 @@ result / reason
 
 只有以下条件同时满足，首个 K 线占位场景才算完成：
 
-1. 所有可见自绘内容仍只是最小三角形/矩形，不引入字体和真实 K 线。
-2. Tab 与左右滑动均能切换 WebView 和原生 Vulkan Surface。
-3. 上下滑动可先让 Tab 置顶，再继续滚动当前内容，反向过程正确。
+1. 所有 Vulkan 自绘内容仅为纯色矩形，Header 为红色、右菜单为黄色、底部原生页面为绿色，不引入字体和真实 K 线。
+2. 四个 WebView 页面和一个绿色 Vulkan 页面均可通过 Tab 切换；网页横向手势不被外层拦截，其他指定区域可横向切换。
+3. Tab 初始覆盖在 Header 底边且可见，WebView 初始完全在屏幕外；上拉后 Tab 停在 TopBar 下方，再继续滚动当前内容，网页到顶下拉后可重新拉下 WebView。
 4. 接缝处慢拖、快滑和惯性没有可复现的抖动或双滚动。
 5. 右菜单以约 1/4 屏宽进入，同时推动整个联动场景，动画无抖动。
-6. Surface 重建、页面切换、菜单动画和前后台恢复不会使用旧会话或旧帧。
+6. Surface 重建、页面切换、菜单动画和前后台恢复不会使用旧会话或旧帧，各页面滚动状态不串用。
 7. 上述行为先由两端具体实现通过，再经过公共化后的完整回归。
 8. host 测试通过，Android、鸿蒙分别完成构建和相关设备验证。
 
@@ -301,9 +309,14 @@ result / reason
 
 - 已确认当前方向：先完成基础设置和真实多 Surface 适配，不做通用引擎。
 - 已确认暂缓范围：Agent 自动生成 App 功能暂不引入，后续单独评审。
-- 已确认绘制范围：保留最小绘制，字体和真实 K 线延后。
-- 已确认首个场景：K 线结构、双内容 Surface、纵横联动和右侧菜单动画。
+- 已确认绘制范围：保留最小纯色绘制，字体和真实 K 线延后。
+- 已确认首个场景：四个 WebView、一个绿色 Vulkan、全屏上下衔接、指定区域横向切换和右侧菜单动画。
 - 已确认基础原则：Surface 联动先于抽象，必须先完成两端真实适配和验收。
 - 待审阅：平台直接探针、双端具体实现后再提取最小公共能力的实施顺序。
-- 实施批准：待记录。
-- 阶段结果：待记录。
+- 实施情况：用户已要求先在 sample 中验证效果，当前改动保持未提交。
+- 当前实现：Android 使用三个固定 ID 的 Vulkan Surface（Header 红、底部绿、菜单黄）与四个独立 WebView；鸿蒙使用三个 XComponent、四个 ArkWeb、系统 Scroll/Swiper/nestedScroll 和单一 animateTo。未引入公共协调抽象。
+- WebView 地址：使用参考项目 `notice / relevance / rank / f10` URL 与 `CFFEX|F|IF` 参数；纯色占位由双端共享的 `surface_probe.h` 提供。
+- 构建验证：host `test_log` 与 `test_surface_probe` 2/2 通过；Android `assembleDebug`、`lintDebug` 通过；鸿蒙 `assembleHap` 通过，未配置签名。
+- Android 上拉问题定位：SurfaceView 不消费 DOWN 时没有 child touch target，方向判断只放在 `onInterceptTouchEvent` 导致根 View 的 `onTouchEvent` 收到 MOVE 时仍无手势归属；已将方向锁定前移到 `dispatchTouchEvent`，并取消滚动内容组对屏外子 View 的提前裁剪。
+- Android 内容不显示定位：设备日志已出现纵向手势和 fling，但整个 scrollGroup 被平移到屏外，Tab/WebView 随容器边界被裁掉；已改为固定容器并分别平移 Header、Tab、内容区，同时改为 Tab 覆盖 Header 底边、外层最大偏移为 Header 高减 Tab 高。最新修复已通过双端构建，仍待设备安装复验。
+- 设备验证：Android 后续已安装旧探针并复现上述问题，最新修复 APK 尚待安装复验；鸿蒙未检测到设备。因此接缝、惯性、菜单动画和生命周期仍待真机验收，当前不得标记为“无抖动已验证”。

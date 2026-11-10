@@ -27,8 +27,12 @@ int main() {
     assertColor(canvas, svk::ui::Color{1.0f, 0.0f, 0.0f, 1.0f});
 
     svk::demo::buildSurfaceProbeFrame(canvas, 320, 240,
-                                      svk::ui::Color{0.0f, 1.0f, 0.0f, 1.0f});
+                                      svk::demo::surfaceProbeColor(1));
     assertColor(canvas, svk::ui::Color{0.0f, 1.0f, 0.0f, 1.0f});
+
+    svk::demo::buildSurfaceProbeFrame(canvas, 320, 240,
+                                      svk::demo::surfaceProbeColor(2));
+    assertColor(canvas, svk::ui::Color{1.0f, 1.0f, 0.0f, 1.0f});
 
     svk::demo::buildSurfaceProbeFrame(canvas, 0, 240);
     assert(canvas.vertices().empty());
