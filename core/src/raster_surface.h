@@ -14,9 +14,8 @@ namespace ui { class Canvas; }
 // Rendered means the submission was accepted, not physical presentation.
 enum class RenderResult { Rendered, Retry, Failed };
 
-// Raster-only surface backend. All backends obey the same thread/lifetime
-// contract: initialize/render/setSize/suspend/resume 均在同一个线程调用
-// （Android/iOS 壳为 UI 线程直调；上层引入 Raster 线程后改为 Raster 线程）。
+// 唯一输出是平台 Surface。所有方法均在同一个线程顺序调用
+// （Android/鸿蒙壳为 UI 线程直调；上层引入 Raster 线程后改为 Raster 线程）。
 class IRasterSurface {
 public:
     virtual ~IRasterSurface() = default;

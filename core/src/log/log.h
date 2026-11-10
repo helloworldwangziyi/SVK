@@ -1,169 +1,34 @@
 #pragma once
 
-/**
- * @file log.h
- * @brief svk 日志封装，底层使用 third_party/spdlog（header-only）。
- *
- * core 提供便携默认（stdout），也可在平台终端 sink 的基础上追加完整文件 sink：
- * @code{.cpp}
- * svk::log::init("estarx");                                     // stdout（测试/默认）
- * svk::log::init(androidLogger);                                // 仅 Android logcat
- * svk::log::initWithFile(androidLogger, {filesDir + "/logs"});  // logcat + 文件
- * @endcode
- *
- * 所有项目日志统一输出：
- *   [svk][<feature>][<event> key=value ...]
- *
- * 使用方式：
- * @code{.cpp}
- * svk::log::init("estarx");
- * SVK_LOGI("renderer", "initialized width={} height={}", w, h);
- * @endcode
- *
- * 高频事件用限速变体，防止刷屏淹没关键日志：
- * @code{.cpp}
- * SVK_LOGW_ONCE("vulkan", "validation_unsupported layer={}", name);   // 只写一次
- * SVK_LOGI_THROTTLE("quote", 5000, "alive ticks={}", n);              // 按调用点限速
- * SVK_LOGW_THROTTLE_KEY("quote", instrumentId, 60000, "seq_gap ..."); // 按合约限速
- * @endcode
- * 限速窗口内压制的条数，在下一次放行时以 suppressed=N 附在正文末尾。
- */
-
-#include <algorithm>
-#include <atomic>
 #include <chrono>
 #include <cctype>
-#include <csignal>
 #include <cstddef>
-#include <cstdint>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <memory>
 #include <mutex>
-#include <random>
 #include <sstream>
 #include <string>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
-#include <spdlog/async.h>
-#include <spdlog/spdlog.h>
-#include <spdlog/sinks/basic_file_sink.h>
-#include <spdlog/sinks/rotating_file_sink.h>
+#include <spdlog/sinks/base_sink.h>
 #include <spdlog/sinks/stdout_sinks.h>
+#include <spdlog/spdlog.h>
 
-#include "log_crypto.h"
-
-namespace svk {
-namespace log {
+namespace svk::log {
 
 struct LogFileConfig {
     std::string directory;
     std::string filePrefix = "estarx-vulkan";
-    std::string auditFilePrefix = "audit";
     spdlog::level::level_enum terminalLevel = spdlog::level::debug;
     spdlog::level::level_enum fileLevel = spdlog::level::debug;
-    spdlog::level::level_enum flushOnLevel = spdlog::level::info;
-    bool async = true;
-    size_t asyncQueueSize = 8192;
-    size_t asyncThreadCount = 1;
-    spdlog::async_overflow_policy asyncOverflowPolicy =
-        spdlog::async_overflow_policy::overrun_oldest;
-    // 轮转：单文件超过 maxFileSizeBytes 切为 name.N.log，同次启动最多保留
-    // maxRotatedFiles 份轮转。
     size_t maxFileSizeBytes = 10 * 1024 * 1024;
-    size_t maxRotatedFiles = 5;
-    // 清理：initWithFile 时删除同前缀的过期文件（maxFileAgeDays<=0 不按时间删），
-    // 总量超过 maxTotalBytes 时从最老删起（0=不限制）。审计文件单独配置。
-    size_t maxTotalBytes = 200ull * 1024 * 1024;
-    int maxFileAgeDays = 7;
-    size_t auditMaxTotalBytes = 50ull * 1024 * 1024;
-    int auditMaxFileAgeDays = 30;
-    // 会话信息：由平台壳填入（App 版本、机型、系统版本等），随 session_started
-    // 写入主通道与审计通道文件头。
-    std::string sessionInfo;
-    // 落盘加密：64 个十六进制字符（32 字节 ChaCha20 密钥）。为空不加密。
-    // 开启后文件 sink 不做轮转（见 log_crypto.h 头部注释）。
-    std::string fileEncryptionKeyHex;
-};
-
-/** 日志通道：引擎/业务共用默认 logger（可丢）；审计独立文件、同步直写（不丢）。 */
-enum class Channel {
-    engine,
-    audit,
 };
 
 namespace detail {
-
-inline std::string& currentLogDirectoryStorage() {
-    static std::string value;
-    return value;
-}
-
-inline std::string& currentLogFilePathStorage() {
-    static std::string value;
-    return value;
-}
-
-inline spdlog::sink_ptr& currentFileSinkStorage() {
-    static spdlog::sink_ptr value;
-    return value;
-}
-
-// 审计通道：独立 logger 与文件 sink，同步直写，不经过异步队列。
-inline std::shared_ptr<spdlog::logger>& auditLoggerStorage() {
-    static std::shared_ptr<spdlog::logger> value;
-    return value;
-}
-
-inline spdlog::sink_ptr& currentAuditFileSinkStorage() {
-    static spdlog::sink_ptr value;
-    return value;
-}
-
-inline std::string& currentAuditLogFilePathStorage() {
-    static std::string value;
-    return value;
-}
-
-inline std::string& currentSessionIdStorage() {
-    static std::string value;
-    return value;
-}
-
-inline spdlog::level::level_enum& currentTerminalLevelStorage() {
-    static auto value = spdlog::level::debug;
-    return value;
-}
-
-inline spdlog::level::level_enum& currentFileLevelStorage() {
-    static auto value = spdlog::level::debug;
-    return value;
-}
-
-inline bool& currentAsyncStorage() {
-    static bool value = false;
-    return value;
-}
-
-inline const char* overflowPolicyName(spdlog::async_overflow_policy policy) {
-    switch (policy) {
-        case spdlog::async_overflow_policy::block: return "block";
-        case spdlog::async_overflow_policy::overrun_oldest: return "overrun_oldest";
-        case spdlog::async_overflow_policy::discard_new: return "discard_new";
-    }
-    return "unknown";
-}
-
-inline std::string joinPath(const std::string& directory, const std::string& filename) {
-    if (directory.empty() || directory.back() == '/') {
-        return directory + filename;
-    }
-    return directory + "/" + filename;
-}
 
 inline std::string sanitizeFilePrefix(std::string prefix) {
     for (char& ch : prefix) {
@@ -175,324 +40,154 @@ inline std::string sanitizeFilePrefix(std::string prefix) {
     return prefix.empty() ? "estarx-vulkan" : prefix;
 }
 
-inline std::string makeLogFilePath(const LogFileConfig& config,
-                                   const std::string& prefix) {
-    const auto now = std::chrono::system_clock::now();
-    const auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(
-                            now.time_since_epoch()) %
-                        1000;
-    const std::time_t time = std::chrono::system_clock::to_time_t(now);
+inline std::string dateString(std::chrono::system_clock::time_point timePoint) {
+    const std::time_t time = std::chrono::system_clock::to_time_t(timePoint);
     std::tm local{};
 #if defined(_WIN32)
     localtime_s(&local, &time);
 #else
     localtime_r(&time, &local);
 #endif
-
-    std::ostringstream filename;
-    filename << sanitizeFilePrefix(prefix) << '-'
-             << std::put_time(&local, "%Y%m%d-%H%M%S") << '-' << std::setfill('0')
-             << std::setw(3) << millis.count() << ".log";
-    return joinPath(config.directory, filename.str());
+    std::ostringstream value;
+    value << std::put_time(&local, "%Y-%m-%d");
+    return value.str();
 }
 
-/** 会话 id：时间戳 + 4 位十六进制随机后缀，用于关联诊断日志与行情录制。 */
-inline std::string makeSessionId() {
-    const auto now = std::chrono::system_clock::now();
-    const auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(
-                            now.time_since_epoch()) %
-                        1000;
-    const std::time_t time = std::chrono::system_clock::to_time_t(now);
-    std::tm local{};
-#if defined(_WIN32)
-    localtime_s(&local, &time);
-#else
-    localtime_r(&time, &local);
-#endif
-    std::random_device rd;
-    std::ostringstream id;
-    id << std::put_time(&local, "%Y%m%d-%H%M%S") << '-' << std::setfill('0')
-       << std::setw(3) << millis.count() << '-' << std::hex << std::setw(4)
-       << (rd() & 0xFFFF);
-    return id.str();
-}
+class DailyFileSink final : public spdlog::sinks::base_sink<std::mutex> {
+public:
+    DailyFileSink(std::string directory, std::string filePrefix,
+                  size_t maxFileSizeBytes)
+        : directory_(std::move(directory)),
+          filePrefix_(sanitizeFilePrefix(std::move(filePrefix))),
+          maxFileSizeBytes_(maxFileSizeBytes) {
+        std::filesystem::create_directories(directory_);
+        openDay(dateString(std::chrono::system_clock::now()));
+    }
 
-/**
- * 清理日志目录：删除同前缀（含轮转后缀 name.N.log）的过期文件，
- * 再按修改时间升序删到总量达标。在创建新文件之前调用，
- * 因此不会误删本次启动的新文件。返回删除的文件数与字节数。
- */
-inline void pruneLogDirectory(const std::string& directory,
-                              const std::string& prefix, size_t maxTotalBytes,
-                              int maxAgeDays, uint64_t* deletedFiles,
-                              uint64_t* deletedBytes) {
-    namespace fs = std::filesystem;
-    *deletedFiles = 0;
-    *deletedBytes = 0;
-    std::error_code ec;
-    if (!fs::is_directory(directory, ec)) {
-        return;
+    std::string currentPath() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return currentPath_;
     }
-    struct Item {
-        fs::path path;
-        uint64_t size;
-        fs::file_time_type mtime;
-    };
-    std::vector<Item> items;
-    uint64_t totalBytes = 0;
-    for (const auto& entry : fs::directory_iterator(directory, ec)) {
-        if (!entry.is_regular_file(ec)) {
-            continue;
-        }
-        if (entry.path().filename().string().rfind(prefix, 0) != 0) {
-            continue;
-        }
-        const uint64_t size = entry.file_size(ec);
-        items.push_back({entry.path(), size, fs::last_write_time(entry.path(), ec)});
-        totalBytes += size;
-    }
-    const auto now = fs::file_time_type::clock::now();
-    const auto maxAge = std::chrono::hours(24LL * maxAgeDays);
-    std::sort(items.begin(), items.end(),
-              [](const Item& a, const Item& b) { return a.mtime < b.mtime; });
-    for (const auto& item : items) {
-        const bool expired = maxAgeDays > 0 && now - item.mtime > maxAge;
-        const bool overTotal =
-            maxTotalBytes > 0 && totalBytes > maxTotalBytes;
-        if (!expired && !overTotal) {
-            continue;
-        }
-        if (fs::remove(item.path, ec)) {
-            ++*deletedFiles;
-            *deletedBytes += item.size;
-            totalBytes -= item.size;
-        }
-    }
-}
 
-/**
- * 按配置创建文件 sink：配置了 fileEncryptionKeyHex 且密钥合法时用加密 sink
- * （不轮转）；否则用轮转 sink。
- */
-inline spdlog::sink_ptr makeFileSink(const std::string& path,
-                                     const LogFileConfig& config) {
-    if (!config.fileEncryptionKeyHex.empty()) {
-        uint8_t key[32];
-        if (hexToKey(config.fileEncryptionKeyHex, key)) {
-            return std::make_shared<EncryptingFileSink>(path, key);
+protected:
+    void sink_it_(const spdlog::details::log_msg& msg) override {
+        spdlog::memory_buf_t formatted;
+        formatter_->format(msg, formatted);
+
+        const std::string date = dateString(msg.time);
+        if (date != date_) {
+            openDay(date);
+        }
+        const size_t bytes = formatted.size();
+        if (currentSize_ > 0 && maxFileSizeBytes_ > 0 &&
+            (currentSize_ >= maxFileSizeBytes_ ||
+             bytes > maxFileSizeBytes_ - currentSize_)) {
+            openPart(date_, part_ + 1);
+        }
+        if (!file_.is_open()) {
+            throw spdlog::spdlog_ex("Log file is not open: " + currentPath_);
+        }
+        file_.write(formatted.data(), static_cast<std::streamsize>(bytes));
+        if (!file_) {
+            throw spdlog::spdlog_ex("Failed to write log file: " + currentPath_);
+        }
+        currentSize_ += bytes;
+    }
+
+    void flush_() override {
+        if (file_.is_open()) {
+            file_.flush();
         }
     }
-    return std::make_shared<spdlog::sinks::rotating_file_sink_mt>(
-        path, config.maxFileSizeBytes, config.maxRotatedFiles);
-}
 
-/** 调用点级限速状态：每个 THROTTLE 宏展开在调用点自带一份 static。 */
-struct ThrottleState {
-    std::atomic<int64_t> lastPassMs{0};
-    std::atomic<uint32_t> suppressed{0};
+private:
+    std::string pathFor(const std::string& date, size_t part) const {
+        std::ostringstream filename;
+        filename << filePrefix_ << '-' << date;
+        if (part > 0) {
+            filename << '-' << std::setfill('0') << std::setw(3) << part;
+        }
+        filename << ".log";
+        return (std::filesystem::path(directory_) / filename.str()).string();
+    }
+
+    void openPart(const std::string& date, size_t part) {
+        if (file_.is_open()) {
+            file_.close();
+        }
+        date_ = date;
+        part_ = part;
+        currentPath_ = pathFor(date, part);
+        currentSize_ = 0;
+        std::error_code ec;
+        if (std::filesystem::exists(currentPath_, ec)) {
+            currentSize_ = static_cast<size_t>(
+                std::filesystem::file_size(currentPath_, ec));
+            if (ec) {
+                currentSize_ = 0;
+            }
+        }
+        file_.open(currentPath_, std::ios::binary | std::ios::app);
+        if (!file_.is_open()) {
+            throw spdlog::spdlog_ex("Failed to open log file: " + currentPath_);
+        }
+    }
+
+    void openDay(const std::string& date) {
+        size_t part = 0;
+        while (true) {
+            const std::string path = pathFor(date, part);
+            std::error_code ec;
+            const bool exists = std::filesystem::exists(path, ec);
+            const size_t size = exists ? static_cast<size_t>(
+                std::filesystem::file_size(path, ec)) : 0;
+            if (ec || !exists || size == 0 || maxFileSizeBytes_ == 0 ||
+                size < maxFileSizeBytes_) {
+                openPart(date, part);
+                return;
+            }
+            ++part;
+        }
+    }
+
+    std::string directory_;
+    std::string filePrefix_;
+    size_t maxFileSizeBytes_;
+    std::string date_;
+    size_t part_ = 0;
+    std::string currentPath_;
+    size_t currentSize_ = 0;
+    std::ofstream file_;
 };
 
-inline int64_t steadyNowMs() {
-    return std::chrono::duration_cast<std::chrono::milliseconds>(
-               std::chrono::steady_clock::now().time_since_epoch())
-        .count();
-}
-
-/**
- * 调用点级限速：interval 窗口内的重复调用被拒绝并计数；窗口外第一次调用放行，
- * 并经 suppressedOut 带回自上次放行以来被压制的条数。多线程并发放行时，
- * 竞争失败者按被压制处理。
- */
-inline bool throttleTryPass(ThrottleState& state, std::chrono::milliseconds interval,
-                            uint32_t* suppressedOut) {
-    const int64_t nowMs = steadyNowMs();
-    int64_t last = state.lastPassMs.load(std::memory_order_relaxed);
-    if (last != 0 && nowMs - last < interval.count()) {
-        state.suppressed.fetch_add(1, std::memory_order_relaxed);
-        return false;
-    }
-    if (!state.lastPassMs.compare_exchange_strong(last, nowMs,
-                                                  std::memory_order_relaxed)) {
-        state.suppressed.fetch_add(1, std::memory_order_relaxed);
-        return false;
-    }
-    *suppressedOut = state.suppressed.exchange(0, std::memory_order_relaxed);
-    return true;
-}
-
-/**
- * 按 key 限速（典型 key：合约代码），各 key 独立计时。key 集合需有界
- * （如订阅的合约数），条目不淘汰；用于无界 key 时必须另行清理。
- */
-inline bool throttleKeyTryPass(const std::string& key,
-                               std::chrono::milliseconds interval,
-                               uint32_t* suppressedOut) {
-    struct Entry {
-        int64_t lastPassMs = 0;
-        uint32_t suppressed = 0;
-    };
-    static std::mutex s_mutex;
-    static std::unordered_map<std::string, Entry> s_entries;
-
-    std::lock_guard<std::mutex> lock(s_mutex);
-    Entry& entry = s_entries[key];
-    const int64_t nowMs = steadyNowMs();
-    if (entry.lastPassMs != 0 && nowMs - entry.lastPassMs < interval.count()) {
-        ++entry.suppressed;
-        return false;
-    }
-    entry.lastPassMs = nowMs;
-    *suppressedOut = entry.suppressed;
-    entry.suppressed = 0;
-    return true;
-}
-
-/** 敏感 key 清单（小写）：命中的 key=value 在写出前就地掩码。 */
-inline std::vector<std::string>& sensitiveKeysStorage() {
-    static std::vector<std::string> keys = {
-        "phone", "mobile", "idcard", "id_card", "token",
-        "password", "secret", "account", "bankcard",
-    };
-    return keys;
-}
-
-/** 当前线程的帧号：renderer 每帧 setFrameSeq，日志自动带 frame= 字段。 */
-inline uint64_t& frameSeqStorage() {
-    static thread_local uint64_t seq = 0;
-    return seq;
-}
-
-inline bool& maskingEnabledStorage() {
-    static bool value = true;
+inline std::shared_ptr<DailyFileSink>& fileSinkStorage() {
+    static std::shared_ptr<DailyFileSink> value;
     return value;
 }
 
-inline bool keyIsSensitive(const char* key, size_t keyLen) {
-    char lower[64];
-    if (keyLen >= sizeof(lower)) {
-        return false;
-    }
-    for (size_t i = 0; i < keyLen; ++i) {
-        lower[i] = static_cast<char>(
-            std::tolower(static_cast<unsigned char>(key[i])));
-    }
-    for (const auto& sensitive : sensitiveKeysStorage()) {
-        const size_t kLen = sensitive.size();
-        // 精确命中，或 "_token" 式后缀命中（如 access_token）。
-        const bool exact =
-            keyLen == kLen && std::memcmp(lower, sensitive.data(), kLen) == 0;
-        const bool suffix = keyLen > kLen && lower[keyLen - kLen - 1] == '_' &&
-                            std::memcmp(lower + keyLen - kLen,
-                                        sensitive.data(), kLen) == 0;
-        if (exact || suffix) {
-            return true;
-        }
-    }
-    return false;
+inline LogFileConfig& fileConfigStorage() {
+    static LogFileConfig value;
+    return value;
 }
 
-/** 就地掩码 value：len<=4 全掩；5~7 留首尾各 1；>=8 留前 3 后 2。 */
-inline void maskRange(std::string& text, size_t from, size_t to) {
-    const size_t len = to - from;
-    if (len == 0) {
-        return;
-    }
-    size_t keepHead = 0;
-    size_t keepTail = 0;
-    if (len >= 8) {
-        keepHead = 3;
-        keepTail = 2;
-    } else if (len >= 5) {
-        keepHead = 1;
-        keepTail = 1;
-    }
-    for (size_t i = from + keepHead; i < to - keepTail; ++i) {
-        text[i] = '*';
-    }
-}
-
-/** 扫描正文中的 key=value 片段，命中敏感清单即就地掩码（无分配）。 */
-inline void maskSensitiveInPlace(std::string& detail) {
-    if (!maskingEnabledStorage()) {
-        return;
-    }
-    const size_t n = detail.size();
-    size_t pos = 0;
-    while (pos < n) {
-        size_t end = detail.find(' ', pos);
-        if (end == std::string::npos) {
-            end = n;
-        }
-        const size_t eq = detail.find('=', pos);
-        if (eq < end && keyIsSensitive(detail.data() + pos, eq - pos)) {
-            maskRange(detail, eq + 1, end);
-        }
-        pos = end + 1;
-    }
-}
-
-/** 已格式化正文的统一出口：级别拦截、敏感字段掩码、三段式前缀、Error 同步 flush。 */
-inline void writeFormatted(spdlog::logger* logger,
-                           spdlog::level::level_enum level,
-                           spdlog::string_view_t feature,
-                           std::string detail) {
-    if (!logger || !logger->should_log(level)) {
-        return;
-    }
-    maskSensitiveInPlace(detail);
-    if (const uint64_t frameSeq = frameSeqStorage(); frameSeq != 0) {
-        detail += " frame=" + std::to_string(frameSeq);
-    }
-    logger->log(level, "[svk][{}][{}]", feature, detail);
-    if (level >= spdlog::level::err) {
-        try {
-            logger->flush();
-        } catch (...) {
-        }
-    }
-}
-
-/** 通道路由：审计通道有独立 logger；未初始化（无文件）时回退到默认 logger。 */
-inline spdlog::logger* loggerFor(Channel channel) {
-    if (channel == Channel::audit) {
-        if (const auto& audit = auditLoggerStorage()) {
-            return audit.get();
-        }
-    }
-    return spdlog::default_logger_raw();
+inline bool sameConfig(const LogFileConfig& a, const LogFileConfig& b) {
+    return a.directory == b.directory && a.filePrefix == b.filePrefix &&
+           a.terminalLevel == b.terminalLevel && a.fileLevel == b.fileLevel &&
+           a.maxFileSizeBytes == b.maxFileSizeBytes;
 }
 
 } // namespace detail
 
-/**
- * @brief 把平台壳构造好的 logger 设为默认 logger（统一格式与级别）。
- * @param logger 平台壳构造好的 spdlog logger；为空则不做任何事
- */
 inline void init(const std::shared_ptr<spdlog::logger>& logger) {
     if (!logger) {
         return;
     }
-    // sink/系统日志负责时间、级别、进程与 tag；消息正文严格从 [svk] 开始。
     logger->set_pattern("%v");
     logger->set_level(spdlog::level::debug);
     spdlog::set_default_logger(logger);
-    detail::currentLogDirectoryStorage().clear();
-    detail::currentLogFilePathStorage().clear();
-    detail::currentFileSinkStorage().reset();
-    detail::auditLoggerStorage().reset();
-    detail::currentAuditFileSinkStorage().reset();
-    detail::currentAuditLogFilePathStorage().clear();
-    detail::currentSessionIdStorage().clear();
-    detail::currentTerminalLevelStorage() = spdlog::level::debug;
-    detail::currentFileLevelStorage() = spdlog::level::debug;
-    detail::currentAsyncStorage() = false;
+    detail::fileSinkStorage().reset();
 }
 
-/**
- * @brief 便携默认：stdout。桌面、测试及未定制 sink 的平台直接使用；
- * 同名 logger 重复 init 只生效一次。
- * @param tag logger 名（重复调用时按它复用已有 logger）
- */
 inline void init(const std::string& tag = "estarx") {
     auto logger = spdlog::get(tag);
     if (!logger) {
@@ -501,160 +196,8 @@ inline void init(const std::string& tag = "estarx") {
     init(logger);
 }
 
-inline bool hasFileSink();
-
-/**
- * @brief 保留平台终端 sink，并追加完整文件 sink。
- *
- * 同一目录重复调用时复用现有文件，不会因 Surface 重建或重复初始化而创建
- * 多个日志文件。文件创建失败时回退为终端 logger 并返回 false。
- */
-inline bool initWithFile(const std::shared_ptr<spdlog::logger>& terminalLogger,
-                         const LogFileConfig& config,
-                         std::string* createdFilePath = nullptr) {
-    if (createdFilePath) {
-        createdFilePath->clear();
-    }
-    if (!terminalLogger) {
-        return false;
-    }
-    if (config.directory.empty()) {
-        init(terminalLogger);
-        spdlog::warn("[svk][log][file_sink_disabled reason=no_directory]");
-        return false;
-    }
-    if (detail::currentLogDirectoryStorage() == config.directory &&
-        detail::currentAsyncStorage() == config.async && hasFileSink() &&
-        detail::auditLoggerStorage()) {
-        if (createdFilePath) {
-            *createdFilePath = detail::currentLogFilePathStorage();
-        }
-        return true;
-    }
-
-    std::vector<spdlog::sink_ptr> sinks;
-    sinks.reserve(terminalLogger->sinks().size() + 1);
-    for (const auto& sink : terminalLogger->sinks()) {
-        if (sink == detail::currentFileSinkStorage() ||
-            sink == detail::currentAuditFileSinkStorage()) {
-            continue;
-        }
-        sink->set_pattern("%v");
-        sink->set_level(config.terminalLevel);
-        sinks.push_back(sink);
-    }
-    if (sinks.empty()) {
-        init(terminalLogger);
-        return false;
-    }
-
-    // 清理发生在创建新文件之前，不会误删本次启动的新文件。
-    uint64_t prunedFiles = 0;
-    uint64_t prunedBytes = 0;
-    detail::pruneLogDirectory(config.directory,
-                              detail::sanitizeFilePrefix(config.filePrefix),
-                              config.maxTotalBytes, config.maxFileAgeDays,
-                              &prunedFiles, &prunedBytes);
-    uint64_t prunedAuditFiles = 0;
-    uint64_t prunedAuditBytes = 0;
-    detail::pruneLogDirectory(config.directory,
-                              detail::sanitizeFilePrefix(config.auditFilePrefix),
-                              config.auditMaxTotalBytes, config.auditMaxFileAgeDays,
-                              &prunedAuditFiles, &prunedAuditBytes);
-
-    const std::string filePath =
-        detail::makeLogFilePath(config, config.filePrefix);
-    try {
-        auto fileSink = detail::makeFileSink(filePath, config);
-        fileSink->set_pattern("%Y-%m-%d %H:%M:%S.%e [%l] [thread %t] %v");
-        fileSink->set_level(config.fileLevel);
-        sinks.push_back(fileSink);
-
-        std::shared_ptr<spdlog::logger> logger;
-        if (config.async) {
-            auto pool = spdlog::thread_pool();
-            if (!pool) {
-                spdlog::init_thread_pool(config.asyncQueueSize,
-                                         config.asyncThreadCount);
-                pool = spdlog::thread_pool();
-            }
-            logger = std::make_shared<spdlog::async_logger>(
-                terminalLogger->name(), sinks.begin(), sinks.end(), pool,
-                config.asyncOverflowPolicy);
-        } else {
-            logger = std::make_shared<spdlog::logger>(terminalLogger->name(),
-                                                      sinks.begin(), sinks.end());
-        }
-
-        const auto loggerLevel = config.terminalLevel < config.fileLevel
-                                     ? config.terminalLevel
-                                     : config.fileLevel;
-        logger->set_level(loggerLevel);
-        logger->flush_on(config.flushOnLevel);
-        spdlog::set_default_logger(logger);
-
-        detail::currentLogDirectoryStorage() = config.directory;
-        detail::currentLogFilePathStorage() = filePath;
-        detail::currentFileSinkStorage() = fileSink;
-        detail::currentAsyncStorage() = config.async;
-
-        // 审计通道：独立文件、同步直写（不经过异步队列，写完即返回），
-        // 终端 sink 与主通道共享，保证 logcat/控制台同样可见。
-        const std::string auditFilePath =
-            detail::makeLogFilePath(config, config.auditFilePrefix);
-        auto auditFileSink = detail::makeFileSink(auditFilePath, config);
-        auditFileSink->set_pattern("%Y-%m-%d %H:%M:%S.%e [%l] [thread %t] %v");
-        auditFileSink->set_level(config.fileLevel);
-        std::vector<spdlog::sink_ptr> auditSinks;
-        auditSinks.reserve(sinks.size());
-        for (const auto& sink : sinks) {
-            if (sink != fileSink) {
-                auditSinks.push_back(sink);
-            }
-        }
-        auditSinks.push_back(auditFileSink);
-        auto auditLogger = std::make_shared<spdlog::logger>(
-            terminalLogger->name() + "/audit", auditSinks.begin(),
-            auditSinks.end());
-        auditLogger->set_level(loggerLevel);
-        auditLogger->flush_on(config.flushOnLevel);
-        detail::auditLoggerStorage() = auditLogger;
-        detail::currentAuditFileSinkStorage() = auditFileSink;
-        detail::currentAuditLogFilePathStorage() = auditFilePath;
-
-        if (createdFilePath) {
-            *createdFilePath = filePath;
-        }
-        detail::currentTerminalLevelStorage() = config.terminalLevel;
-        detail::currentFileLevelStorage() = config.fileLevel;
-        detail::currentSessionIdStorage() = detail::makeSessionId();
-        spdlog::info("[svk][log][session_started id={} info=\"{}\"]",
-                     detail::currentSessionIdStorage(), config.sessionInfo);
-        auditLogger->log(spdlog::level::info, "[svk][log][session_started id={}]",
-                         detail::currentSessionIdStorage());
-        if (prunedFiles + prunedAuditFiles > 0) {
-            spdlog::info(
-                "[svk][log][log_pruned files={} bytes={} audit_files={} "
-                "audit_bytes={}]",
-                prunedFiles, prunedBytes, prunedAuditFiles, prunedAuditBytes);
-        }
-        if (config.async) {
-            spdlog::info(
-                "[svk][log][async_started queue_size={} threads={} overflow={}]",
-                config.asyncQueueSize, config.asyncThreadCount,
-                detail::overflowPolicyName(config.asyncOverflowPolicy));
-        }
-        return true;
-    } catch (const std::exception& ex) {
-        init(terminalLogger);
-        spdlog::warn("[svk][log][file_sink_disabled path={} reason={}]", filePath,
-                     ex.what());
-        return false;
-    }
-}
-
 inline bool hasFileSink() {
-    const auto& fileSink = detail::currentFileSinkStorage();
+    const auto& fileSink = detail::fileSinkStorage();
     spdlog::logger* logger = spdlog::default_logger_raw();
     if (!fileSink || !logger) {
         return false;
@@ -667,211 +210,88 @@ inline bool hasFileSink() {
     return false;
 }
 
-inline const std::string& currentLogFilePath() {
-    return detail::currentLogFilePathStorage();
+inline std::string currentLogFilePath() {
+    const auto& fileSink = detail::fileSinkStorage();
+    return fileSink ? fileSink->currentPath() : std::string{};
 }
 
-/** 审计通道的独立日志文件路径；未初始化文件日志时为空。 */
-inline const std::string& currentAuditLogFilePath() {
-    return detail::currentAuditLogFilePathStorage();
-}
-
-/** 本次文件日志的会话 id；未初始化文件日志时为空。 */
-inline const std::string& currentSessionId() {
-    return detail::currentSessionIdStorage();
-}
-
-/**
- * @brief 运行时调整终端/文件级别（排障时临时把 fileLevel 降到 Debug 等）。
- * 同时作用于主通道与审计通道；调整立即生效，不需要重建 logger。
- */
-inline void setLevels(spdlog::level::level_enum terminalLevel,
-                      spdlog::level::level_enum fileLevel) {
-    detail::currentTerminalLevelStorage() = terminalLevel;
-    detail::currentFileLevelStorage() = fileLevel;
-    const auto loggerLevel =
-        terminalLevel < fileLevel ? terminalLevel : fileLevel;
-    const auto& fileSink = detail::currentFileSinkStorage();
-    const auto& auditFileSink = detail::currentAuditFileSinkStorage();
-    spdlog::logger* loggers[] = {spdlog::default_logger_raw(),
-                                 detail::auditLoggerStorage().get()};
-    for (spdlog::logger* logger : loggers) {
-        if (!logger) {
-            continue;
+inline bool initWithFile(const std::shared_ptr<spdlog::logger>& terminalLogger,
+                         const LogFileConfig& config,
+                         std::string* createdFilePath = nullptr) {
+    if (createdFilePath) {
+        createdFilePath->clear();
+    }
+    if (!terminalLogger) {
+        return false;
+    }
+    if (!config.directory.empty() && hasFileSink() &&
+        detail::sameConfig(detail::fileConfigStorage(), config)) {
+        if (createdFilePath) {
+            *createdFilePath = currentLogFilePath();
         }
-        for (const auto& sink : logger->sinks()) {
-            if (sink == fileSink || sink == auditFileSink) {
-                sink->set_level(fileLevel);
-            } else {
-                sink->set_level(terminalLevel);
-            }
+        return true;
+    }
+
+    std::vector<spdlog::sink_ptr> sinks;
+    for (const auto& sink : terminalLogger->sinks()) {
+        if (sink != detail::fileSinkStorage()) {
+            sink->set_pattern("%v");
+            sink->set_level(config.terminalLevel);
+            sinks.push_back(sink);
         }
-        logger->set_level(loggerLevel);
+    }
+    if (sinks.empty()) {
+        return false;
+    }
+    auto terminalOnly = std::make_shared<spdlog::logger>(
+        terminalLogger->name(), sinks.begin(), sinks.end());
+    terminalOnly->set_level(config.terminalLevel);
+    if (config.directory.empty()) {
+        init(terminalOnly);
+        return false;
+    }
+
+    try {
+        auto fileSink = std::make_shared<detail::DailyFileSink>(
+            config.directory, config.filePrefix, config.maxFileSizeBytes);
+        fileSink->set_pattern("%Y-%m-%d %H:%M:%S.%e [%l] [thread %t] %v");
+        fileSink->set_level(config.fileLevel);
+        sinks.push_back(fileSink);
+        auto logger = std::make_shared<spdlog::logger>(
+            terminalLogger->name(), sinks.begin(), sinks.end());
+        logger->set_level(config.terminalLevel < config.fileLevel
+                              ? config.terminalLevel
+                              : config.fileLevel);
+        logger->flush_on(spdlog::level::err);
+        spdlog::set_default_logger(logger);
+        detail::fileSinkStorage() = fileSink;
+        detail::fileConfigStorage() = config;
+        if (createdFilePath) {
+            *createdFilePath = fileSink->currentPath();
+        }
+        return true;
+    } catch (const std::exception& ex) {
+        init(terminalOnly);
+        spdlog::warn("[svk][log][file_sink_disabled reason={}]", ex.what());
+        return false;
     }
 }
 
-/** @brief 终端与文件同时调整级别。 */
 inline void setLevel(spdlog::level::level_enum level) {
-    setLevels(level, level);
-}
-
-/** @brief 只调整文件级别，终端保持不变。 */
-inline void setFileLevel(spdlog::level::level_enum level) {
-    setLevels(detail::currentTerminalLevelStorage(), level);
-}
-
-/** @brief 覆盖敏感 key 清单（小写，支持 "_key" 后缀命中）；默认见实现。 */
-inline void setSensitiveKeys(std::vector<std::string> keys) {
-    detail::sensitiveKeysStorage() = std::move(keys);
-}
-
-/** @brief 开关敏感字段掩码（默认开）。 */
-inline void setMaskingEnabled(bool enabled) {
-    detail::maskingEnabledStorage() = enabled;
-}
-
-/**
- * @brief 设置当前线程的帧号，之后本线程日志自动带 frame=N 字段。
- * renderer 每帧调用；平台壳线程不设置则不带。引擎单线程模型下开销可忽略。
- */
-inline void setFrameSeq(uint64_t seq) {
-    detail::frameSeqStorage() = seq;
-}
-
-/** @brief 清除帧号（如渲染挂起后），后续日志不再带 frame= 字段。 */
-inline void clearFrameSeq() {
-    detail::frameSeqStorage() = 0;
-}
-
-/** 日志归集选项：按修改时间窗把日志文件复制到目标目录，附 manifest。 */
-struct LogCollectOptions {
-    std::string directory;
-    int64_t mtimeFromMs = 0;             // 闭区间起点（epoch 毫秒）
-    int64_t mtimeToMs = INT64_MAX;       // 闭区间终点
-    std::string destDir;
-    std::string manifestNote;            // 业务附注（用户 id、反馈单号等）
-};
-
-/**
- * @brief 归集日志文件到 destDir 并写 manifest.txt（时间、session、文件清单）。
- * 压缩与上传由平台/业务层完成（各端均有系统压缩 API）。返回归集的文件数。
- */
-inline size_t collectLogFiles(const LogCollectOptions& options,
-                              std::string* err = nullptr) {
-    namespace fs = std::filesystem;
-    if (err) {
-        err->clear();
+    spdlog::logger* logger = spdlog::default_logger_raw();
+    if (!logger) {
+        return;
     }
-    std::error_code ec;
-    if (options.directory.empty() || options.destDir.empty() ||
-        !fs::is_directory(options.directory, ec)) {
-        if (err) {
-            *err = "invalid_directory";
-        }
-        return 0;
-    }
-    fs::create_directories(options.destDir, ec);
-    if (ec) {
-        if (err) {
-            *err = "dest_not_writable";
-        }
-        return 0;
-    }
-
-    // file_time_type 的 epoch 不保证是系统时钟，用两次"现在"对齐换算。
-    const auto nowFile = fs::file_time_type::clock::now();
-    const auto nowSysMs =
-        std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::system_clock::now().time_since_epoch())
-            .count();
-
-    struct Collected {
-        std::string name;
-        uint64_t size;
-    };
-    std::vector<Collected> collected;
-    uint64_t totalBytes = 0;
-    for (const auto& entry : fs::directory_iterator(options.directory, ec)) {
-        if (!entry.is_regular_file(ec) || entry.path().extension() != ".log") {
-            continue;
-        }
-        std::error_code mtimeEc;
-        const auto ftime = fs::last_write_time(entry.path(), mtimeEc);
-        if (mtimeEc) {
-            continue;
-        }
-        const int64_t mtimeMs =
-            std::chrono::duration_cast<std::chrono::milliseconds>(ftime -
-                                                                  nowFile)
-                .count() +
-            nowSysMs;
-        if (mtimeMs < options.mtimeFromMs || mtimeMs > options.mtimeToMs) {
-            continue;
-        }
-        const auto dest =
-            fs::path(options.destDir) / entry.path().filename();
-        if (!fs::copy_file(entry.path(), dest,
-                           fs::copy_options::overwrite_existing, ec)) {
-            continue;
-        }
-        const uint64_t size = entry.file_size(ec);
-        collected.push_back({entry.path().filename().string(), size});
-        totalBytes += size;
-    }
-
-    std::ofstream manifest(fs::path(options.destDir) / "manifest.txt",
-                           std::ios::trunc);
-    manifest << "generated_at_ms=" << nowSysMs << "\n"
-             << "session_id=" << currentSessionId() << "\n"
-             << "note=" << options.manifestNote << "\n"
-             << "files=" << collected.size() << " total_bytes=" << totalBytes
-             << "\n";
-    for (const auto& item : collected) {
-        manifest << item.name << " " << item.size << "\n";
-    }
-    return collected.size();
-}
-
-inline size_t asyncQueuedCount() {
-    const auto pool = spdlog::thread_pool();
-    return pool ? pool->queue_size() : 0;
-}
-
-inline size_t asyncOverrunCount() {
-    const auto pool = spdlog::thread_pool();
-    return pool ? pool->overrun_counter() : 0;
-}
-
-inline size_t asyncDiscardCount() {
-    const auto pool = spdlog::thread_pool();
-    return pool ? pool->discard_counter() : 0;
-}
-
-inline size_t asyncDroppedCount() {
-    return asyncOverrunCount() + asyncDiscardCount();
-}
-
-inline void resetAsyncDropCounters() {
-    if (const auto pool = spdlog::thread_pool()) {
-        pool->reset_overrun_counter();
-        pool->reset_discard_counter();
+    logger->set_level(level);
+    for (const auto& sink : logger->sinks()) {
+        sink->set_level(level);
     }
 }
 
 inline void flush() noexcept {
     try {
-        spdlog::logger* logger = spdlog::default_logger_raw();
-        if (logger) {
+        if (spdlog::logger* logger = spdlog::default_logger_raw()) {
             logger->flush();
-        }
-        if (const auto& audit = detail::auditLoggerStorage()) {
-            audit->flush();
-        }
-        const size_t dropped = asyncDroppedCount();
-        if (logger && dropped > 0) {
-            spdlog::warn("[svk][log][async_queue_overrun count={}]", dropped);
-            logger->flush();
-            resetAsyncDropCounters();
         }
     } catch (...) {
     }
@@ -883,100 +303,7 @@ inline void shutdown() noexcept {
         spdlog::shutdown();
     } catch (...) {
     }
-    detail::currentLogDirectoryStorage().clear();
-    detail::currentLogFilePathStorage().clear();
-    detail::currentFileSinkStorage().reset();
-    detail::auditLoggerStorage().reset();
-    detail::currentAuditFileSinkStorage().reset();
-    detail::currentAuditLogFilePathStorage().clear();
-    detail::currentSessionIdStorage().clear();
-    detail::currentAsyncStorage() = false;
-}
-
-/// ---- 崩溃保全（设计见 docs/logging-design.md） ----
-
-/** 崩溃时尽力调用的 flush 钩子（如 BinaryRecorder 的落盘钩子）。 */
-using CrashFlushHook = void (*)();
-
-namespace detail {
-
-inline std::atomic<CrashFlushHook>* crashHookSlots() {
-    static std::atomic<CrashFlushHook> slots[8] = {};
-    return slots;
-}
-
-inline void crashSignalHandler(int sig) {
-    // 尽力而为的 flush：严格说以下调用都不是 async-signal-safe，
-    // 但崩溃路径上这是工程通行做法（glog/xlog 同款取舍）；随后恢复默认
-    // 动作重抛信号，保留 core dump 与系统崩溃报告。
-    flush();
-    for (int i = 0; i < 8; ++i) {
-        if (const CrashFlushHook hook =
-                crashHookSlots()[i].load(std::memory_order_acquire)) {
-            hook();
-        }
-    }
-    std::signal(sig, SIG_DFL);
-    std::raise(sig);
-}
-
-} // namespace detail
-
-/** 登记崩溃 flush 钩子；最多 8 个，满返回 false。 */
-inline bool addCrashFlushHook(CrashFlushHook hook) {
-    for (int i = 0; i < 8; ++i) {
-        CrashFlushHook expected = nullptr;
-        if (detail::crashHookSlots()[i].compare_exchange_strong(
-                expected, hook, std::memory_order_acq_rel)) {
-            return true;
-        }
-    }
-    return false;
-}
-
-#if defined(__unix__) || defined(__APPLE__)
-/**
- * @brief 安装崩溃 flush 处理器（SIGSEGV/SIGBUS/SIGILL/SIGABRT/SIGFPE），幂等。
- * 崩溃时先尽力 flush 诊断日志与登记的钩子，再以默认动作重抛信号。
- * 平台壳应在进程启动早期调用。
- */
-inline void installCrashHandler() {
-    static std::once_flag once;
-    std::call_once(once, [] {
-        struct sigaction action {};
-        action.sa_handler = detail::crashSignalHandler;
-        sigemptyset(&action.sa_mask);
-        action.sa_flags = 0;
-        const int signals[] = {SIGSEGV, SIGBUS, SIGILL, SIGABRT, SIGFPE};
-        for (const int sig : signals) {
-            sigaction(sig, &action, nullptr);
-        }
-    });
-}
-#else
-inline void installCrashHandler() {}
-#endif
-
-/**
- * @brief 写一条结构化项目日志。
- *
- * feature 是稳定、可过滤的功能域；format 的第一个 token 是稳定事件名，
- * 后续动态字段使用 key=value。统一封装确保 C++ 日志不会漏掉三段式前缀。
- * channel 选择写入引擎（默认，异步可丢）或审计（独立文件，同步直写）通道。
- */
-template <typename... Args>
-inline void write(Channel channel,
-                  spdlog::level::level_enum level,
-                  spdlog::string_view_t feature,
-                  spdlog::format_string_t<Args...> format,
-                  Args&&... args) {
-    spdlog::logger* logger = detail::loggerFor(channel);
-    if (!logger || !logger->should_log(level)) {
-        return;
-    }
-    detail::writeFormatted(
-        logger, level, feature,
-        spdlog::fmt_lib::format(format, std::forward<Args>(args)...));
+    detail::fileSinkStorage().reset();
 }
 
 template <typename... Args>
@@ -984,78 +311,16 @@ inline void write(spdlog::level::level_enum level,
                   spdlog::string_view_t feature,
                   spdlog::format_string_t<Args...> format,
                   Args&&... args) {
-    write(Channel::engine, level, feature, format, std::forward<Args>(args)...);
-}
-
-/** @brief 审计通道写入：登录、下单、撤单、成交、资金变动。不可配合限速宏使用。 */
-template <typename... Args>
-inline void writeAudit(spdlog::level::level_enum level,
-                       spdlog::string_view_t feature,
-                       spdlog::format_string_t<Args...> format,
-                       Args&&... args) {
-    write(Channel::audit, level, feature, format, std::forward<Args>(args)...);
-}
-
-/**
- * @brief 限速写日志：同一调用点在 interval 内只放行第一条；下一次放行时
- * 把窗口内被压制的条数以 suppressed=N 附在正文末尾。
- * @param state 调用点状态，由 THROTTLE 宏的调用点 static 提供
- */
-template <typename... Args>
-inline void writeThrottled(detail::ThrottleState& state,
-                           std::chrono::milliseconds interval,
-                           spdlog::level::level_enum level,
-                           spdlog::string_view_t feature,
-                           spdlog::format_string_t<Args...> format,
-                           Args&&... args) {
     spdlog::logger* logger = spdlog::default_logger_raw();
     if (!logger || !logger->should_log(level)) {
         return;
     }
-    uint32_t suppressed = 0;
-    if (!detail::throttleTryPass(state, interval, &suppressed)) {
-        return;
-    }
-    std::string detail =
-        spdlog::fmt_lib::format(format, std::forward<Args>(args)...);
-    if (suppressed > 0) {
-        detail += " suppressed=" + std::to_string(suppressed);
-    }
-    detail::writeFormatted(logger, level, feature, std::move(detail));
+    logger->log(level, "[svk][{}][{}]", feature,
+                spdlog::fmt_lib::format(format, std::forward<Args>(args)...));
 }
 
-/**
- * @brief 按 key 限速写日志：各 key 独立计时，互不影响（典型：按合约代码
- * 限速同类告警）。key 集合需有界。
- */
-template <typename... Args>
-inline void writeThrottledKey(spdlog::string_view_t key,
-                              std::chrono::milliseconds interval,
-                              spdlog::level::level_enum level,
-                              spdlog::string_view_t feature,
-                              spdlog::format_string_t<Args...> format,
-                              Args&&... args) {
-    spdlog::logger* logger = spdlog::default_logger_raw();
-    if (!logger || !logger->should_log(level)) {
-        return;
-    }
-    uint32_t suppressed = 0;
-    if (!detail::throttleKeyTryPass(std::string(key.data(), key.size()), interval,
-                                    &suppressed)) {
-        return;
-    }
-    std::string detail =
-        spdlog::fmt_lib::format(format, std::forward<Args>(args)...);
-    if (suppressed > 0) {
-        detail += " suppressed=" + std::to_string(suppressed);
-    }
-    detail::writeFormatted(logger, level, feature, std::move(detail));
-}
+} // namespace svk::log
 
-} // namespace log
-} // namespace svk
-
-/// 日志宏：第一个参数必须是功能域，后续参数遵循 spdlog 格式串。
 #define SVK_LOGV(feature, ...) \
     ::svk::log::write(spdlog::level::trace, feature, __VA_ARGS__)
 #define SVK_LOGD(feature, ...) \
@@ -1066,109 +331,3 @@ inline void writeThrottledKey(spdlog::string_view_t key,
     ::svk::log::write(spdlog::level::warn, feature, __VA_ARGS__)
 #define SVK_LOGE(feature, ...) \
     ::svk::log::write(spdlog::level::err, feature, __VA_ARGS__)
-
-/// 审计通道宏：登录、下单、撤单、成交、资金变动等不可丢事件。
-/// 写入独立文件、同步直写；不提供 ONCE/THROTTLE 变体（审计不允许被压制）。
-#define SVK_ALOGV(feature, ...) \
-    ::svk::log::writeAudit(spdlog::level::trace, feature, __VA_ARGS__)
-#define SVK_ALOGD(feature, ...) \
-    ::svk::log::writeAudit(spdlog::level::debug, feature, __VA_ARGS__)
-#define SVK_ALOGI(feature, ...) \
-    ::svk::log::writeAudit(spdlog::level::info, feature, __VA_ARGS__)
-#define SVK_ALOGW(feature, ...) \
-    ::svk::log::writeAudit(spdlog::level::warn, feature, __VA_ARGS__)
-#define SVK_ALOGE(feature, ...) \
-    ::svk::log::writeAudit(spdlog::level::err, feature, __VA_ARGS__)
-
-/// ONCE：同一调用点在整个进程生命周期只写一次（如驱动不支持的特性告警）。
-#define SVK_LOGV_ONCE(feature, ...) \
-    do { \
-        static std::atomic<bool> svkLogOnce_ = false; \
-        if (!svkLogOnce_.exchange(true)) { \
-            ::svk::log::write(spdlog::level::trace, feature, __VA_ARGS__); \
-        } \
-    } while (0)
-#define SVK_LOGD_ONCE(feature, ...) \
-    do { \
-        static std::atomic<bool> svkLogOnce_ = false; \
-        if (!svkLogOnce_.exchange(true)) { \
-            ::svk::log::write(spdlog::level::debug, feature, __VA_ARGS__); \
-        } \
-    } while (0)
-#define SVK_LOGI_ONCE(feature, ...) \
-    do { \
-        static std::atomic<bool> svkLogOnce_ = false; \
-        if (!svkLogOnce_.exchange(true)) { \
-            ::svk::log::write(spdlog::level::info, feature, __VA_ARGS__); \
-        } \
-    } while (0)
-#define SVK_LOGW_ONCE(feature, ...) \
-    do { \
-        static std::atomic<bool> svkLogOnce_ = false; \
-        if (!svkLogOnce_.exchange(true)) { \
-            ::svk::log::write(spdlog::level::warn, feature, __VA_ARGS__); \
-        } \
-    } while (0)
-#define SVK_LOGE_ONCE(feature, ...) \
-    do { \
-        static std::atomic<bool> svkLogOnce_ = false; \
-        if (!svkLogOnce_.exchange(true)) { \
-            ::svk::log::write(spdlog::level::err, feature, __VA_ARGS__); \
-        } \
-    } while (0)
-
-/// THROTTLE：同一调用点在 intervalMs 窗口内只写第一条，窗口内压制的条数
-/// 在下一次放行时以 suppressed=N 附在正文末尾（如活性心跳、重试刷屏）。
-#define SVK_LOGV_THROTTLE(feature, intervalMs, ...) \
-    do { \
-        static ::svk::log::detail::ThrottleState svkThrottleState_; \
-        ::svk::log::writeThrottled(svkThrottleState_, \
-                                   std::chrono::milliseconds(intervalMs), \
-                                   spdlog::level::trace, feature, __VA_ARGS__); \
-    } while (0)
-#define SVK_LOGD_THROTTLE(feature, intervalMs, ...) \
-    do { \
-        static ::svk::log::detail::ThrottleState svkThrottleState_; \
-        ::svk::log::writeThrottled(svkThrottleState_, \
-                                   std::chrono::milliseconds(intervalMs), \
-                                   spdlog::level::debug, feature, __VA_ARGS__); \
-    } while (0)
-#define SVK_LOGI_THROTTLE(feature, intervalMs, ...) \
-    do { \
-        static ::svk::log::detail::ThrottleState svkThrottleState_; \
-        ::svk::log::writeThrottled(svkThrottleState_, \
-                                   std::chrono::milliseconds(intervalMs), \
-                                   spdlog::level::info, feature, __VA_ARGS__); \
-    } while (0)
-#define SVK_LOGW_THROTTLE(feature, intervalMs, ...) \
-    do { \
-        static ::svk::log::detail::ThrottleState svkThrottleState_; \
-        ::svk::log::writeThrottled(svkThrottleState_, \
-                                   std::chrono::milliseconds(intervalMs), \
-                                   spdlog::level::warn, feature, __VA_ARGS__); \
-    } while (0)
-#define SVK_LOGE_THROTTLE(feature, intervalMs, ...) \
-    do { \
-        static ::svk::log::detail::ThrottleState svkThrottleState_; \
-        ::svk::log::writeThrottled(svkThrottleState_, \
-                                   std::chrono::milliseconds(intervalMs), \
-                                   spdlog::level::err, feature, __VA_ARGS__); \
-    } while (0)
-
-/// THROTTLE_KEY：同一 key 在 intervalMs 窗口内只写第一条，各 key 独立计时
-/// （如按合约代码限速 seq_gap 告警）。key 集合需有界。
-#define SVK_LOGV_THROTTLE_KEY(feature, key, intervalMs, ...) \
-    ::svk::log::writeThrottledKey((key), std::chrono::milliseconds(intervalMs), \
-                                  spdlog::level::trace, feature, __VA_ARGS__)
-#define SVK_LOGD_THROTTLE_KEY(feature, key, intervalMs, ...) \
-    ::svk::log::writeThrottledKey((key), std::chrono::milliseconds(intervalMs), \
-                                  spdlog::level::debug, feature, __VA_ARGS__)
-#define SVK_LOGI_THROTTLE_KEY(feature, key, intervalMs, ...) \
-    ::svk::log::writeThrottledKey((key), std::chrono::milliseconds(intervalMs), \
-                                  spdlog::level::info, feature, __VA_ARGS__)
-#define SVK_LOGW_THROTTLE_KEY(feature, key, intervalMs, ...) \
-    ::svk::log::writeThrottledKey((key), std::chrono::milliseconds(intervalMs), \
-                                  spdlog::level::warn, feature, __VA_ARGS__)
-#define SVK_LOGE_THROTTLE_KEY(feature, key, intervalMs, ...) \
-    ::svk::log::writeThrottledKey((key), std::chrono::milliseconds(intervalMs), \
-                                  spdlog::level::err, feature, __VA_ARGS__)

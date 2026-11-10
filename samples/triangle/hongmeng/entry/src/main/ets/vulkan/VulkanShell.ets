@@ -24,7 +24,7 @@ export function nativeBridge(): NativeBridge | null {
  * 对应 Android 的 VulkanSurfaceView（SurfaceView + Choreographer）。
  *
  * 线程模型：XComponent 回调、DisplaySync 帧回调、本文件的 NAPI 调用全部在
- * UI 线程，与 Android/iOS 壳一致，core 的无锁单线程假设原样成立。
+ * UI 线程，与 Android 壳一致，core 的无锁单线程假设原样成立。
  */
 @Component
 export struct VulkanShell {

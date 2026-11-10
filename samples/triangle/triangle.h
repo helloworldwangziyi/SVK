@@ -5,7 +5,7 @@
  * @brief Triangle App 业务：每帧往 ui::Canvas 里画一个三色渐变三角形。
  *
  * 由 samples/triangle/app.cpp 装配到 svk::IApp，平台层不包含本头。
- * 三角形绕屏幕中心缓慢旋转、顶点色随时间循环，用来验证三端 VSync 帧通道。
+ * 三角形绕屏幕中心缓慢旋转、顶点色随时间循环，用来验证两端 VSync 帧通道。
  */
 #include "ui/canvas.h"
 

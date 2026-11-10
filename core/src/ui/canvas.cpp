@@ -11,7 +11,7 @@ void Canvas::clear() {
     batches_.clear();
 }
 
-void Canvas::drawTriangle(float x1, float y1, float x2, float y2, float x3,
+void Canvas:: drawTriangle(float x1, float y1, float x2, float y2, float x3,
                           float y3, const Rect& clip, Color c1, Color c2, Color c3) {
     const UiVertex verts[3] = {
         {x1, y1, c1.r, c1.g, c1.b, c1.a, 0.0f, 0.0f},

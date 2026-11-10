@@ -42,12 +42,10 @@ add_library(estarx_vulkan SHARED
     ${SVK_ROOT}/platform/android/cpp/android_jni_bridge.cpp
     ${SVK_ROOT}/platform/android/cpp/android_vulkan_platform.cpp
     ${SVK_ROOT}/core/src/renderer.cpp
-    ${SVK_ROOT}/core/src/gpu/backend_factory.cpp
     ${SVK_ROOT}/core/src/gpu/vulkan/vulkan_context.cpp
     ${SVK_ROOT}/core/src/gpu/vulkan/swapchain.cpp
     ${SVK_ROOT}/core/src/gpu/vulkan/ui_pipeline.cpp
     ${SVK_ROOT}/core/src/gpu/vulkan/texture_cache.cpp
-    ${SVK_ROOT}/core/src/gpu/vulkan/vulkan_backend.cpp
     ${SVK_ROOT}/core/src/ui/canvas.cpp
 )
 

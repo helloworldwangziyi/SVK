@@ -149,20 +149,11 @@ bool VulkanContext::createInstance() {
     appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
     appInfo.apiVersion = VK_API_VERSION_1_0;
 
-    // 先放入通用 surface 扩展，再按编译目标补充平台 surface 扩展。
-    // VK_KHR_surface 是平台无关的窗口表面抽象，任何上屏渲染都要它；
-    // 平台 surface 扩展（每个窗口系统一个）按编译宏追加：
-    // Android NDK 在 __ANDROID__ 下自动定义 VK_USE_PLATFORM_ANDROID_KHR，
-    // 鸿蒙构建显式传 -DVK_USE_PLATFORM_OHOS；host 桌面构建（测试不调用
-    // initialize()）与 iOS（走 gpu/metal/）都不加。
+    // 通用 surface 扩展与平台扩展均由当前窗口适配器提供。
     std::vector<const char*> extensions = {
         VK_KHR_SURFACE_EXTENSION_NAME,
+        platform_->getSurfaceExtensionName(),
     };
-#if defined(VK_USE_PLATFORM_ANDROID_KHR)
-    extensions.push_back(VK_KHR_ANDROID_SURFACE_EXTENSION_NAME);
-#elif defined(VK_USE_PLATFORM_OHOS)
-    extensions.push_back(VK_OHOS_SURFACE_EXTENSION_NAME);
-#endif
 
     // 枚举实例级扩展：仍是"先取数量、再取数据"的两次调用惯用法。
     uint32_t extCount = 0;
@@ -191,8 +182,6 @@ bool VulkanContext::createInstance() {
     // VkInstanceCreateInfo 总装：应用信息 + 要启用的扩展与校验层。
     VkInstanceCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
-    // flags 保持 0：原先 MoltenVK 要求的 VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR
-    // 已随 Metal 后端移出 Vulkan 路径。
     createInfo.pApplicationInfo = &appInfo;
     // 扩展与层都以"数量 + 字符串指针数组"的形式传入。
     createInfo.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
@@ -242,39 +231,11 @@ bool VulkanContext::createInstance() {
 }
 
 bool VulkanContext::createSurface() {
-    // surface 由本模块按编译目标直接从原生窗口句柄创建（IPlatform 只给不透明
-    // void*，不感知任何图形 API）：Android 包 ANativeWindow，鸿蒙包 OHNativeWindow。
-    // vulkan_android.h / vulkan_ohos.h 已前向声明各自的窗口类型，无需额外 include。
-    SVK_LOGI("vulkan", "surface_create_start");
-    void* handle = platform_ ? platform_->nativeWindowHandle() : nullptr;
-    if (handle == nullptr) {
-        SVK_LOGE("vulkan", "surface_create_failed reason=no_native_window");
+    if (!platform_) {
+        SVK_LOGE("vulkan", "surface_create_failed reason=no_platform");
         return false;
     }
-#if defined(VK_USE_PLATFORM_ANDROID_KHR)
-    VkAndroidSurfaceCreateInfoKHR surfaceInfo{};
-    surfaceInfo.sType = VK_STRUCTURE_TYPE_ANDROID_SURFACE_CREATE_INFO_KHR;
-    surfaceInfo.window = static_cast<ANativeWindow*>(handle);
-    if (vkCreateAndroidSurfaceKHR(instance_, &surfaceInfo, nullptr, &surface_) !=
-        VK_SUCCESS) {
-        SVK_LOGE("vulkan", "surface_create_failed");
-        return false;
-    }
-#elif defined(VK_USE_PLATFORM_OHOS)
-    VkSurfaceCreateInfoOHOS surfaceInfo{};
-    surfaceInfo.sType = VK_STRUCTURE_TYPE_SURFACE_CREATE_INFO_OHOS;
-    surfaceInfo.window = static_cast<OHNativeWindow*>(handle);
-    if (vkCreateSurfaceOHOS(instance_, &surfaceInfo, nullptr, &surface_) !=
-        VK_SUCCESS) {
-        SVK_LOGE("vulkan", "surface_create_failed");
-        return false;
-    }
-#else
-    // host 桌面构建：测试不调用 initialize()；iOS 走 gpu/metal/。
-    SVK_LOGE("vulkan", "surface_create_failed reason=no_platform_backend");
-    return false;
-#endif
-    return true;
+    return platform_->createVulkanSurface(instance_, &surface_);
 }
 
 void VulkanContext::destroySurface() {

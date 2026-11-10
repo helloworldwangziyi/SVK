@@ -8,8 +8,8 @@
 // ============================================================================
 
 #include <jni.h>
-#include <sys/system_properties.h>
 
+#include <memory>
 #include <string>
 
 #include <spdlog/sinks/android_sink.h>
@@ -20,53 +20,20 @@
 #include "render_platform.h"
 #include "ui/canvas.h"
 
-// android_vulkan_platform.cpp 以 C 链接导出的工厂函数：
-// bridge 只需声明原型即可调用，无需知道 AndroidPlatform 类的布局。
 extern "C" svk::IPlatform* svkCreateAndroidPlatform(JNIEnv* env, jobject surface);
 extern "C" void svkDestroyAndroidPlatform(svk::IPlatform* platform);
 
-// App 与渲染器随引擎冷启动创建、nativeShutdown 销毁；g_platform 与 surface
-// 一致（nativeInit 建或热恢复 / nativeDestroy 拆）。全部在 UI 线程访问，无锁。
 static std::unique_ptr<svk::IApp> g_app;
 static svk::IRasterSurface* g_renderer = nullptr;
 static svk::IPlatform* g_platform = nullptr;
 static std::string g_logDirectory;
 static std::string g_reportedLogFile;
 
-// 会话信息写入日志文件头（session_started），排障第一现场。
-// 空格替换为 '_' 保持 key=value 一段式；App 版本由业务层在 Java 侧另行补充。
-static std::string deviceSessionInfo() {
-    char model[PROP_VALUE_MAX] = {};
-    __system_property_get("ro.product.model", model);
-    char osRelease[PROP_VALUE_MAX] = {};
-    __system_property_get("ro.build.version.release", osRelease);
-    std::string info = "platform=android";
-    auto appendSanitized = [&info](const char* key, const char* value) {
-        if (!value[0]) {
-            return;
-        }
-        std::string sanitized = value;
-        for (auto& ch : sanitized) {
-            if (ch == ' ') {
-                ch = '_';
-            }
-        }
-        info += " ";
-        info += key;
-        info += "=";
-        info += sanitized;
-    };
-    appendSanitized("model", model);
-    appendSanitized("os", osRelease);
-    return info;
-}
-
 static void ensureLogger() {
     auto logger = spdlog::get("estarx-vulkan");
     if (!logger) {
         logger = spdlog::android_logger_mt("estarx-vulkan", "estarx-vulkan");
     }
-    svk::log::installCrashHandler();  // 幂等：崩溃时尽力 flush 日志与录制器
     if (g_logDirectory.empty()) {
         svk::log::init(logger);
         return;
@@ -74,7 +41,6 @@ static void ensureLogger() {
 
     svk::log::LogFileConfig config;
     config.directory = g_logDirectory;
-    config.sessionInfo = deviceSessionInfo();
     std::string filePath;
     if (!svk::log::initWithFile(logger, config, &filePath)) {
         return;

@@ -32,12 +32,10 @@ execute_process(
 # ---- 引擎核心静态库（平台无关） ----
 add_library(svk_core STATIC
     core/src/renderer.cpp
-    core/src/gpu/backend_factory.cpp
     core/src/gpu/vulkan/vulkan_context.cpp
     core/src/gpu/vulkan/swapchain.cpp
     core/src/gpu/vulkan/ui_pipeline.cpp
     core/src/gpu/vulkan/texture_cache.cpp
-    core/src/gpu/vulkan/vulkan_backend.cpp
     core/src/ui/canvas.cpp
 )
 
