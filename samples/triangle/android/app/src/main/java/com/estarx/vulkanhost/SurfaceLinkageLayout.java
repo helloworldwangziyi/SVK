@@ -28,8 +28,8 @@ import java.util.ArrayList;
  * Android 专用多 Surface 联动探针，不是公共 UI 抽象。
  *
  * 首屏 Header 与底部内容都占满 TopBar 下的视口，Tab 覆盖 Header 底边，
- * WebView 初始位于屏幕外。纵向只由本类修改外层/Web/Native 偏移；WebView、Header、
- * Tab 和绿色 Vulkan 区域的横向手势都用于切换页面。菜单与页面动画各自只用一个进度。
+ * WebView 初始位于屏幕外。纵向只由本类修改外层/Web/Native 偏移；网页内部可横滑的
+ * 区域优先消费横向手势，其他区域才切换页面。菜单与页面动画各自只用一个进度。
  */
 public final class SurfaceLinkageLayout extends FrameLayout {
     private static final String TAG = "SVK-SurfaceProbe";
@@ -42,6 +42,8 @@ public final class SurfaceLinkageLayout extends FrameLayout {
     private static final int GESTURE_NONE = 0;
     private static final int GESTURE_HORIZONTAL = 1;
     private static final int GESTURE_VERTICAL = 2;
+    private static final int GESTURE_WEB_HORIZONTAL = 3;
+    private static final int GESTURE_PAGER_ANIMATING = 4;
 
     private static final String[] WEB_PATHS = {"notice", "relevance", "rank", "f10"};
     private static final String[] TAB_TITLES = {"资讯", "关联", "排行", "F10", "绿色"};
@@ -73,6 +75,9 @@ public final class SurfaceLinkageLayout extends FrameLayout {
     private int drawerWidth;
     private int gesture = GESTURE_NONE;
     private int activePage = 0;
+    private boolean touchStartedOnWeb;
+    private Boolean webHorizontalInteractive;
+    private int webProbeGeneration;
     private float downX;
     private float downY;
     private float lastY;
@@ -132,8 +137,6 @@ public final class SurfaceLinkageLayout extends FrameLayout {
             tabBar.addView(
                     tab, new LinearLayout.LayoutParams(0, LayoutParams.MATCH_PARENT, 1.0f));
         }
-        scrollGroup.addView(tabBar);
-
         contentViewport = new FrameLayout(context);
         contentViewport.setClipChildren(true);
         contentViewport.setBackgroundColor(Color.WHITE);
@@ -150,6 +153,11 @@ public final class SurfaceLinkageLayout extends FrameLayout {
 
         nativeSurface = new VulkanSurfaceView(context, NATIVE_SURFACE_ID, false);
         contentViewport.addView(nativeSurface);
+
+        // Tab 在内容之后加入；绿色 Surface 内部上滑与 Tab 区域重叠时仍由 Tab 盖住内容。
+        scrollGroup.addView(
+                tabBar,
+                new LayoutParams(LayoutParams.MATCH_PARENT, tabHeight));
 
         LinearLayout topBar = new LinearLayout(context);
         topBar.setOrientation(LinearLayout.HORIZONTAL);
@@ -261,8 +269,9 @@ public final class SurfaceLinkageLayout extends FrameLayout {
 
         LayoutParams nativeParams = (LayoutParams) nativeSurface.getLayoutParams();
         nativeParams.width = w;
-        // 两倍视口高让绿色 Surface 在内部滚动全程仍覆盖视口。
-        nativeParams.height = contentHeight * 2;
+        // 绿色内容只占一个完整视口；置顶后可见高度还要减去 Tab，不能按两倍
+        // 内容高继续上移，否则 Surface 底边越过屏幕底部后会露出白色背景。
+        nativeParams.height = contentHeight;
         nativeSurface.setLayoutParams(nativeParams);
 
         LayoutParams menuParams = (LayoutParams) menuContainer.getLayoutParams();
@@ -290,38 +299,112 @@ public final class SurfaceLinkageLayout extends FrameLayout {
         if (velocityTracker == null) {
             velocityTracker = VelocityTracker.obtain();
         }
+        if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+            velocityTracker.clear();
+        }
         velocityTracker.addMovement(event);
         if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
             stopFling();
-            if (pagerAnimator != null) {
-                pagerAnimator.cancel();
-            }
             downX = event.getX();
             downY = event.getY();
             lastY = downY;
             startPagerPosition = pagerPosition;
-            gesture = GESTURE_NONE;
+            touchStartedOnWeb = isTouchInsideActiveWeb(event);
+            webHorizontalInteractive = null;
+            final int probeGeneration = ++webProbeGeneration;
+            if (touchStartedOnWeb && !isPagerAnimating()) {
+                probeWebHorizontalInteraction(event, probeGeneration);
+            }
+            gesture = isPagerAnimating() ? GESTURE_PAGER_ANIMATING : GESTURE_NONE;
         }
         if (event.getActionMasked() == MotionEvent.ACTION_MOVE
                 && drawerProgress == 0.0f && gesture == GESTURE_NONE) {
             final float dx = event.getX() - downX;
             final float dy = event.getY() - downY;
             if (Math.max(Math.abs(dx), Math.abs(dy)) > touchSlop) {
+                final boolean horizontal = Math.abs(dx) > Math.abs(dy);
+                if (horizontal && touchStartedOnWeb && webHorizontalInteractive == null) {
+                    // DOM 命中检测异步返回前继续把事件交给网页，不能先抢成 Tab 手势。
+                    return super.dispatchTouchEvent(event);
+                }
                 stopFling();
                 startPagerPosition = pagerPosition;
-                final boolean horizontal = Math.abs(dx) > Math.abs(dy);
-                gesture = horizontal ? GESTURE_HORIZONTAL : GESTURE_VERTICAL;
-                Log.d(TAG, "event=gesture_lock owner=" + gestureName(gesture));
+                if (horizontal && touchStartedOnWeb
+                        && Boolean.TRUE.equals(webHorizontalInteractive)) {
+                    gesture = GESTURE_WEB_HORIZONTAL;
+                } else {
+                    gesture = horizontal ? GESTURE_HORIZONTAL : GESTURE_VERTICAL;
+                }
+                Log.d(TAG, "event=gesture_lock owner=" + gestureName(gesture)
+                        + " page=" + activePage);
             }
+        }
+        if ((event.getActionMasked() == MotionEvent.ACTION_UP
+                || event.getActionMasked() == MotionEvent.ACTION_CANCEL)
+                && gesture == GESTURE_WEB_HORIZONTAL) {
+            gesture = GESTURE_NONE;
         }
         // SurfaceView 不消费 DOWN 时没有 child touch target，ViewGroup 会绕过
         // onInterceptTouchEvent 直接调用自身 onTouchEvent，因此方向锁定必须在这里完成。
         return super.dispatchTouchEvent(event);
     }
 
+    private boolean isTouchInsideActiveWeb(MotionEvent event) {
+        if (activePage >= WEB_PAGE_COUNT) {
+            return false;
+        }
+        View webView = webViews.get(activePage);
+        if (webView.getWidth() == 0 || webView.getHeight() == 0) {
+            return false;
+        }
+        final int[] location = new int[2];
+        webView.getLocationOnScreen(location);
+        final float x = event.getRawX();
+        final float y = event.getRawY();
+        return x >= location[0] && x < location[0] + webView.getWidth()
+                && y >= location[1] && y < location[1] + webView.getHeight();
+    }
+
+    private void probeWebHorizontalInteraction(MotionEvent event, int probeGeneration) {
+        final int page = activePage;
+        final WebView webView = webViews.get(page);
+        final int[] location = new int[2];
+        webView.getLocationOnScreen(location);
+        final float scale = webView.getScale();
+        if (scale <= 0.0f) {
+            webHorizontalInteractive = false;
+            return;
+        }
+        final float x = (event.getRawX() - location[0]) / scale;
+        final float y = (event.getRawY() - location[1]) / scale;
+        // View.canScrollHorizontally 只反映文档本身；除 overflow-x 列表外，Canvas/Chart
+        // 可能用手势直接缩放而没有滚动范围，这些区域也必须整段交给网页。
+        final String script = "(function(){var e=document.elementFromPoint(" + x + "," + y + ");"
+                + "while(e){var s=getComputedStyle(e);"
+                + "var marker=(e.id+' '+String(e.className)).toLowerCase();"
+                + "if(e.tagName==='CANVAS'||marker.indexOf('chart')>=0)return true;"
+                + "if(e.scrollWidth>e.clientWidth+1&&(s.overflowX==='auto'"
+                + "||s.overflowX==='scroll'||e===document.documentElement))return true;"
+                + "e=e.parentElement;}return false;})()";
+        webView.evaluateJavascript(script, value -> {
+            if (probeGeneration != webProbeGeneration) {
+                Log.d(TAG, "event=web_horizontal_probe_stale generation=" + probeGeneration);
+                return;
+            }
+            webHorizontalInteractive = Boolean.parseBoolean(value);
+            Log.d(TAG, "event=web_horizontal_probe page=" + page
+                    + " interactive=" + webHorizontalInteractive
+                    + " result=" + (value == null ? "invalid" : "valid"));
+        });
+    }
+
     @Override
     public boolean onInterceptTouchEvent(MotionEvent event) {
-        if (drawerProgress > 0.0f) {
+        // 切页动画期间整段消费但不响应新手势，避免快速输入从半页状态继续切页。
+        if (gesture == GESTURE_PAGER_ANIMATING) {
+            return true;
+        }
+        if (drawerProgress > 0.0f || gesture == GESTURE_WEB_HORIZONTAL) {
             return false;
         }
         return gesture == GESTURE_HORIZONTAL || gesture == GESTURE_VERTICAL;
@@ -355,7 +438,7 @@ public final class SurfaceLinkageLayout extends FrameLayout {
                     animatePagerTo(target);
                 } else if (gesture == GESTURE_VERTICAL) {
                     startVerticalFling();
-                } else {
+                } else if (gesture == GESTURE_NONE) {
                     performClick();
                 }
                 gesture = GESTURE_NONE;
@@ -445,7 +528,8 @@ public final class SurfaceLinkageLayout extends FrameLayout {
     }
 
     private float nativeContentMax() {
-        return Math.max(0, contentHeight);
+        final int visibleHeight = Math.max(0, contentHeight - tabHeight);
+        return Math.max(0, contentHeight - visibleHeight);
     }
 
     private void startVerticalFling() {
@@ -456,6 +540,11 @@ public final class SurfaceLinkageLayout extends FrameLayout {
         }
         final int start = Math.round(outerOffset + activeContentOffset());
         final int maximum = Math.round(outerMaxOffset() + activeContentMax());
+        if ((velocityY < 0.0f && start >= maximum) || (velocityY > 0.0f && start <= 0)) {
+            Log.d(TAG, "event=fling_rejected reason=boundary start=" + start
+                    + " max=" + maximum);
+            return;
+        }
         lastFlingY = start;
         scroller.fling(0, start, 0, Math.round(-velocityY), 0, 0, 0, maximum);
         Log.d(TAG, "event=fling_start start=" + start + " max=" + maximum);
@@ -465,6 +554,10 @@ public final class SurfaceLinkageLayout extends FrameLayout {
     private void stopFling() {
         scroller.abortAnimation();
         removeCallbacks(flingRunnable);
+    }
+
+    private boolean isPagerAnimating() {
+        return pagerAnimator != null && pagerAnimator.isRunning();
     }
 
     private void animatePagerTo(int page) {
@@ -603,7 +696,7 @@ public final class SurfaceLinkageLayout extends FrameLayout {
         super.onDetachedFromWindow();
     }
 
-    /** 只防止 Chromium 抢先消费竖滚；横向由父容器拦截并切换 Tab。 */
+    /** 单指竖滚由场景协调；网页横向区域和多指图表手势必须继续交给 Chromium。 */
     private static final class LinkedWebView extends WebView {
         private float downX;
         private float downY;
@@ -620,7 +713,7 @@ public final class SurfaceLinkageLayout extends FrameLayout {
             } else if (event.getActionMasked() == MotionEvent.ACTION_MOVE) {
                 final float dx = event.getX() - downX;
                 final float dy = event.getY() - downY;
-                if (Math.abs(dy) > Math.abs(dx)) {
+                if (event.getPointerCount() == 1 && Math.abs(dy) > Math.abs(dx)) {
                     return true;
                 }
             }
@@ -632,7 +725,7 @@ public final class SurfaceLinkageLayout extends FrameLayout {
             if (!disallowIntercept) {
                 super.requestDisallowInterceptTouchEvent(false);
             }
-            // Chromium 不得阻断父容器拦截；横滑切 Tab、竖滚由场景统一协调。
+            // Chromium 不知道外层 Tab 边界，不能单独撤销父容器的整段手势归属。
         }
 
         @Override
@@ -652,6 +745,7 @@ public final class SurfaceLinkageLayout extends FrameLayout {
     private static String gestureName(int owner) {
         if (owner == GESTURE_HORIZONTAL) return "horizontal";
         if (owner == GESTURE_VERTICAL) return "vertical";
+        if (owner == GESTURE_WEB_HORIZONTAL) return "web_horizontal";
         return "none";
     }
 }
