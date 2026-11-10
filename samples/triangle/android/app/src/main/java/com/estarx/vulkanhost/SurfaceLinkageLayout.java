@@ -27,8 +27,8 @@ import java.util.ArrayList;
 /**
  * Android 专用多 Surface 联动探针，不是公共 UI 抽象。
  *
- * 首屏 Header 与底部内容都占满 TopBar 下的视口，Tab 覆盖 Header 底边，
- * WebView 初始位于屏幕外。纵向只由本类修改外层/Web/Native 偏移；网页内部可横滑的
+ * Header 占满 TopBar 下的视口，WebView 使用 Tab 置顶后的实际可见高度，
+ * 初始位于屏幕外。纵向只由本类修改外层/Web/Native 偏移；网页内部可横滑的
  * 区域优先消费横向手势，其他区域才切换页面。菜单与页面动画各自只用一个进度。
  */
 public final class SurfaceLinkageLayout extends FrameLayout {
@@ -240,11 +240,27 @@ public final class SurfaceLinkageLayout extends FrameLayout {
     }
 
     @Override
+    protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+        final int webViewHeight = Math.max(0,
+                MeasureSpec.getSize(heightMeasureSpec) - topBarHeight - tabHeight);
+        // 必须在测量前固定 WebView 的实际可见高度；初始 MATCH_PARENT 会让 Chromium
+        // 按整个窗口高度限制 scrollTo，导致最后一段内容无法滚入屏幕。
+        for (WebView webView : webViews) {
+            LayoutParams params = (LayoutParams) webView.getLayoutParams();
+            if (params.height != webViewHeight) {
+                params.height = webViewHeight;
+                webView.setLayoutParams(params);
+            }
+        }
+        super.onMeasure(widthMeasureSpec, heightMeasureSpec);
+    }
+
+    @Override
     protected void onSizeChanged(int w, int h, int oldw, int oldh) {
         super.onSizeChanged(w, h, oldw, oldh);
         sceneWidth = w;
-        // Header 与底部页面都等于 TopBar 下的完整视口；Tab 覆盖 Header 底边，
-        // WebView 初始 y == 屏幕高度，外层只需移动 Header 高减去 Tab 高。
+        // Header 与绿色内容等于 TopBar 下的完整视口；WebView 高度在 onMeasure 中设置，
+        // 初始 y == 屏幕高度，外层只需移动 Header 高减去 Tab 高。
         headerHeight = Math.max(1, h - topBarHeight);
         contentHeight = headerHeight;
         drawerWidth = Math.max(1, w / 4);
@@ -524,7 +540,9 @@ public final class SurfaceLinkageLayout extends FrameLayout {
             return 0.0f;
         }
         WebView webView = webViews.get(page);
-        return Math.max(0.0f, webView.getContentHeight() * webView.getScale() - contentHeight);
+        // Chromium 按实际视口高度钳制 scrollTo，外层必须使用同一个高度。
+        return Math.max(0.0f, webView.getContentHeight() * webView.getScale()
+                - webView.getHeight());
     }
 
     private float nativeContentMax() {

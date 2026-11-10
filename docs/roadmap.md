@@ -84,7 +84,7 @@ KLineScene
 
 - TopBar 固定在上方，HeaderSurface 占满 TopBar 下方的完整视口。
 - TabBar 覆盖在 HeaderSurface 底边，初始即可见；WebView 初始纵坐标等于屏幕高度，完全位于屏幕外，可直接上拉进入。
-- 每个底部 WebView 与 HeaderSurface 一样，都是 TopBar 下完整视口大小；Tab 覆盖在 Header 上，不压缩 Header 或底部页面的声明高度。
+- Header 与绿色原生内容使用 TopBar 下的完整视口高度；WebView 使用 TopBar 和 Tab 之后的实际可见高度，避免 Chromium 按屏外视口提前限制滚动。
 - 外层最大上拉距离为 `Header 高 - Tab 高`，这样 Tab 到达 TopBar 下方时，WebView 恰好位于 Tab 下方。
 - 非当前内容页在静止状态位于横向屏外，但各页文档和滚动位置需要保留。
 - Header 为红色，右菜单为黄色，底部原生内容为绿色，便于直接观察系统 Surface 的层级与位移。
@@ -317,6 +317,7 @@ result / reason
 - 当前实现：Android 使用三个固定 ID 的 Vulkan Surface（Header 红、底部绿、菜单黄）与四个独立 WebView；鸿蒙使用三个 XComponent、四个 ArkWeb、系统 Scroll/Swiper/nestedScroll 和单一 animateTo。未引入公共协调抽象。
 - Android 网页手势：DOWN 时按 DOM 命中链识别横向滚动区域及 Canvas/Chart 图表，命中结果按手势 generation 去旧；内部区域归网页，普通区域归 Tab，多指图表事件继续交给 Chromium。
 - Android 绿色页：内容高度改为一个完整视口，最大内部偏移按实际可见高度计算；Tab 以固定高度置于内容层之后，抵达底部后拒绝继续向边界外 fling。
+- Android 网页底部：撤销只调整外层滚动上限的方案；WebView 在测量阶段使用 TopBar 和 Tab 之后的实际可见高度，滚动上限取实际 WebView 高度，与 Chromium 的钳制保持一致，待手动复验。
 - Android 快速横滑：切页动画期间开始的手势整段忽略，速度记录在 DOWN 时清空，避免从半页位置与旧页面状态继续串联切页。
 - WebView 地址：使用参考项目 `notice / relevance / rank / f10` URL 与 `CFFEX|F|IF` 参数；纯色占位由双端共享的 `surface_probe.h` 提供。
 - 构建验证：host `test_log` 与 `test_surface_probe` 2/2 通过；Android `assembleDebug`、`lintDebug` 通过；鸿蒙 `assembleHap` 通过，未配置签名。
