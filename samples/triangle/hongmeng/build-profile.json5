@@ -1,7 +1,21 @@
 {
   "app": {
     // 签名留空：在 DevEco 里用 File > Project Structure > Signing Configs 自动签名。
-    "signingConfigs": [],
+    "signingConfigs": [
+      {
+        "name": "default",
+        "type": "HarmonyOS",
+        "material": {
+          "certpath": "/Users/wangziyi/.ohos/config/default_hongmeng_EFbrMBjoryuhTeKTJcCvad6FOW1Ins01GCPPr_KBgw0=.cer",
+          "keyAlias": "debugKey",
+          "keyPassword": "0000001BBE866CAC1043F46CB8606A4B881069D117F4B96F115FEF40975A2712BCE4C95F91D434D3E4BE79",
+          "profile": "/Users/wangziyi/.ohos/config/default_hongmeng_EFbrMBjoryuhTeKTJcCvad6FOW1Ins01GCPPr_KBgw0=.p7b",
+          "signAlg": "SHA256withECDSA",
+          "storeFile": "/Users/wangziyi/.ohos/config/default_hongmeng_EFbrMBjoryuhTeKTJcCvad6FOW1Ins01GCPPr_KBgw0=.p12",
+          "storePassword": "0000001BAC38EED499332D28BB4796763D8FBC063A736DCD58ACF523D35C1C667818F97D3A11712A053D73"
+        }
+      }
+    ],
     "products": [
       {
         "name": "default",
