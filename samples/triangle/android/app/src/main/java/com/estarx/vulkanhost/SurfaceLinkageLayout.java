@@ -4,7 +4,9 @@ import android.animation.Animator;
 import android.animation.AnimatorListenerAdapter;
 import android.animation.ValueAnimator;
 import android.content.Context;
+import android.graphics.Bitmap;
 import android.graphics.Color;
+import android.os.SystemClock;
 import android.util.Log;
 import android.view.Gravity;
 import android.view.MotionEvent;
@@ -43,7 +45,7 @@ public final class SurfaceLinkageLayout extends FrameLayout {
     private static final int GESTURE_HORIZONTAL = 1;
     private static final int GESTURE_VERTICAL = 2;
     private static final int GESTURE_WEB_HORIZONTAL = 3;
-    private static final int GESTURE_PAGER_ANIMATING = 4;
+    private static final int GESTURE_CANCELLED = 4;
 
     private static final String[] WEB_PATHS = {"notice", "relevance", "rank", "f10"};
     private static final String[] TAB_TITLES = {"资讯", "关联", "排行", "F10", "绿色"};
@@ -59,6 +61,7 @@ public final class SurfaceLinkageLayout extends FrameLayout {
     private final ArrayList<WebView> webViews = new ArrayList<>();
     private final ArrayList<Button> tabButtons = new ArrayList<>();
     private final float[] webOffsets = new float[WEB_PAGE_COUNT];
+    private final int[] webSessions = new int[WEB_PAGE_COUNT];
     private final View drawerBlocker;
     private final OverScroller scroller;
     private final int touchSlop;
@@ -75,13 +78,23 @@ public final class SurfaceLinkageLayout extends FrameLayout {
     private int drawerWidth;
     private int gesture = GESTURE_NONE;
     private int activePage = 0;
+    // 已落定页、正在执行的目标和最新有效意图分别维护；Tab 只展示 activePage。
+    // 动画期间的新横滑基于 requestedPage 继续推进，所有 Surface 仍由唯一的
+    // pagerPosition 驱动，不让 MOVE 与 ValueAnimator 同时写入分页进度。
+    private int requestedPage = 0;
+    private int pagerTarget = 0;
+    private int pagerGeneration;
+    private int touchContentPage = -1;
     private boolean touchStartedOnWeb;
+    private boolean touchInProgress;
+    private boolean waitingForWebProbe;
     private Boolean webHorizontalInteractive;
     private int webProbeGeneration;
     private float downX;
     private float downY;
     private float lastY;
-    private float startPagerPosition;
+    private float pendingSwipeOffset;
+    private float pendingSwipeVelocity;
     private float pagerPosition;
     private float outerOffset;
     private float nativeOffset;
@@ -215,6 +228,18 @@ public final class SurfaceLinkageLayout extends FrameLayout {
         webView.setWebViewClient(
                 new WebViewClient() {
                     @Override
+                    public void onPageStarted(WebView view, String url, Bitmap favicon) {
+                        ++webSessions[page];
+                        if (touchContentPage == page) {
+                            ++webProbeGeneration;
+                            waitingForWebProbe = false;
+                            webHorizontalInteractive = true;
+                        }
+                        Log.i(TAG, "event=web_load_started page=" + page
+                                + " session_id=" + webSessions[page]);
+                    }
+
+                    @Override
                     public void onPageFinished(WebView view, String url) {
                         webOffsets[page] = clamp(webOffsets[page], 0.0f, webContentMax(page));
                         applyScrollState();
@@ -304,6 +329,10 @@ public final class SurfaceLinkageLayout extends FrameLayout {
         applyScrollState();
         applyPagerState();
         applyDrawerState();
+        if (oldw > 0 && oldh > 0) {
+            cancelTouchProbe("resize");
+            settlePager(requestedPage, "resize");
+        }
         Log.i(TAG, "event=scene_resize width=" + w + " height=" + h
                 + " topbar_height=" + topBarHeight + " header_height=" + headerHeight
                 + " content_height=" + contentHeight + " outer_max=" + outerMaxOffset()
@@ -324,71 +353,113 @@ public final class SurfaceLinkageLayout extends FrameLayout {
             downX = event.getX();
             downY = event.getY();
             lastY = downY;
-            startPagerPosition = pagerPosition;
-            touchStartedOnWeb = isTouchInsideActiveWeb(event);
+            touchInProgress = true;
+            waitingForWebProbe = false;
+            touchContentPage = findTouchedContentPage(event);
+            touchStartedOnWeb = touchContentPage >= 0 && touchContentPage < WEB_PAGE_COUNT;
             webHorizontalInteractive = null;
             final int probeGeneration = ++webProbeGeneration;
-            if (touchStartedOnWeb && !isPagerAnimating()) {
-                probeWebHorizontalInteraction(event, probeGeneration);
+            if (touchStartedOnWeb) {
+                probeWebHorizontalInteraction(event, touchContentPage, probeGeneration);
             }
-            gesture = isPagerAnimating() ? GESTURE_PAGER_ANIMATING : GESTURE_NONE;
+            gesture = GESTURE_NONE;
         }
-        if (event.getActionMasked() == MotionEvent.ACTION_MOVE
+        if (event.getActionMasked() == MotionEvent.ACTION_POINTER_DOWN) {
+            // Chromium 已持有 DOWN 时，多指继续完整交给网页；父容器已接管的手势
+            // 只能取消并消费余下序列，不能把没有 DOWN 的后半段突然交回网页。
+            ++webProbeGeneration;
+            waitingForWebProbe = false;
+            gesture = gesture == GESTURE_HORIZONTAL || gesture == GESTURE_VERTICAL
+                    || gesture == GESTURE_CANCELLED
+                    ? GESTURE_CANCELLED : GESTURE_WEB_HORIZONTAL;
+            stopFling();
+            Log.d(TAG, "event=gesture_cancel reason=multi_touch owner=" + gestureName(gesture));
+        }
+        if ((event.getActionMasked() == MotionEvent.ACTION_MOVE
+                || event.getActionMasked() == MotionEvent.ACTION_UP)
                 && drawerProgress == 0.0f && gesture == GESTURE_NONE) {
             final float dx = event.getX() - downX;
             final float dy = event.getY() - downY;
             if (Math.max(Math.abs(dx), Math.abs(dy)) > touchSlop) {
                 final boolean horizontal = Math.abs(dx) > Math.abs(dy);
                 if (horizontal && touchStartedOnWeb && webHorizontalInteractive == null) {
-                    // DOM 命中检测异步返回前继续把事件交给网页，不能先抢成 Tab 手势。
+                    if (event.getActionMasked() == MotionEvent.ACTION_UP) {
+                        // 短快滑可能先 UP 后收到 DOM 结果；保留本次距离和末段速度，
+                        // 当前回调仍可完成同一次请求，下一次 DOWN/Cancel 会使其失效。
+                        velocityTracker.computeCurrentVelocity(1000, dp(4000));
+                        pendingSwipeOffset = dx;
+                        pendingSwipeVelocity = velocityTracker.getXVelocity();
+                        waitingForWebProbe = true;
+                        touchInProgress = false;
+                    }
                     return super.dispatchTouchEvent(event);
                 }
                 stopFling();
-                startPagerPosition = pagerPosition;
                 if (horizontal && touchStartedOnWeb
                         && Boolean.TRUE.equals(webHorizontalInteractive)) {
                     gesture = GESTURE_WEB_HORIZONTAL;
                 } else {
                     gesture = horizontal ? GESTURE_HORIZONTAL : GESTURE_VERTICAL;
+                    if (!horizontal && isPagerAnimating()) {
+                        // 纵向操作中断分页时落定手指实际命中的页，再修改该页偏移；
+                        // 不把旧 activePage 的竖向滚动写到仍在平移的目标页上。
+                        settlePager(touchContentPage >= 0 ? touchContentPage : requestedPage,
+                                "vertical_gesture");
+                    }
                 }
                 Log.d(TAG, "event=gesture_lock owner=" + gestureName(gesture)
                         + " page=" + activePage);
             }
         }
-        if ((event.getActionMasked() == MotionEvent.ACTION_UP
-                || event.getActionMasked() == MotionEvent.ACTION_CANCEL)
-                && gesture == GESTURE_WEB_HORIZONTAL) {
-            gesture = GESTURE_NONE;
-        }
         // SurfaceView 不消费 DOWN 时没有 child touch target，ViewGroup 会绕过
         // onInterceptTouchEvent 直接调用自身 onTouchEvent，因此方向锁定必须在这里完成。
-        return super.dispatchTouchEvent(event);
+        final boolean handled = super.dispatchTouchEvent(event);
+        if (event.getActionMasked() == MotionEvent.ACTION_UP
+                || event.getActionMasked() == MotionEvent.ACTION_CANCEL) {
+            touchInProgress = false;
+            waitingForWebProbe = false;
+            ++webProbeGeneration;
+            gesture = GESTURE_NONE;
+        }
+        return handled;
     }
 
-    private boolean isTouchInsideActiveWeb(MotionEvent event) {
-        if (activePage >= WEB_PAGE_COUNT) {
-            return false;
+    private int findTouchedContentPage(MotionEvent event) {
+        // 动画期间可能同时露出两页，不能仅按已落定页检测 Web。先检查固定视口
+        // 的裁剪范围，再按当前平移后的系统位置找到真正持有 DOWN 的内容页。
+        if (!containsTouch(contentViewport, event)) {
+            return -1;
         }
-        View webView = webViews.get(activePage);
-        if (webView.getWidth() == 0 || webView.getHeight() == 0) {
+        for (int page = 0; page < WEB_PAGE_COUNT; ++page) {
+            if (containsTouch(webViews.get(page), event)) {
+                return page;
+            }
+        }
+        return containsTouch(nativeSurface, event) ? PAGE_NATIVE : -1;
+    }
+
+    private boolean containsTouch(View view, MotionEvent event) {
+        if (view.getWidth() == 0 || view.getHeight() == 0) {
             return false;
         }
         final int[] location = new int[2];
-        webView.getLocationOnScreen(location);
+        view.getLocationOnScreen(location);
         final float x = event.getRawX();
         final float y = event.getRawY();
-        return x >= location[0] && x < location[0] + webView.getWidth()
-                && y >= location[1] && y < location[1] + webView.getHeight();
+        return x >= location[0] && x < location[0] + view.getWidth()
+                && y >= location[1] && y < location[1] + view.getHeight();
     }
 
-    private void probeWebHorizontalInteraction(MotionEvent event, int probeGeneration) {
-        final int page = activePage;
+    private void probeWebHorizontalInteraction(MotionEvent event, int page, int probeGeneration) {
+        final int session = webSessions[page];
         final WebView webView = webViews.get(page);
         final int[] location = new int[2];
         webView.getLocationOnScreen(location);
         final float scale = webView.getScale();
         if (scale <= 0.0f) {
-            webHorizontalInteractive = false;
+            webHorizontalInteractive = true;
+            Log.w(TAG, "event=web_horizontal_probe_failed page=" + page
+                    + " reason=invalid_scale action=keep_web_gesture");
             return;
         }
         final float x = (event.getRawX() - location[0]) / scale;
@@ -396,28 +467,36 @@ public final class SurfaceLinkageLayout extends FrameLayout {
         // View.canScrollHorizontally 只反映文档本身；除 overflow-x 列表外，Canvas/Chart
         // 可能用手势直接缩放而没有滚动范围，这些区域也必须整段交给网页。
         final String script = "(function(){var e=document.elementFromPoint(" + x + "," + y + ");"
-                + "while(e){var s=getComputedStyle(e);"
+                + "if(!e)return true;while(e){var s=getComputedStyle(e);"
                 + "var marker=(e.id+' '+String(e.className)).toLowerCase();"
-                + "if(e.tagName==='CANVAS'||marker.indexOf('chart')>=0)return true;"
+                + "if(e.tagName==='CANVAS'||e.tagName==='IFRAME'"
+                + "||marker.indexOf('chart')>=0)return true;"
                 + "if(e.scrollWidth>e.clientWidth+1&&(s.overflowX==='auto'"
                 + "||s.overflowX==='scroll'||e===document.documentElement))return true;"
                 + "e=e.parentElement;}return false;})()";
         webView.evaluateJavascript(script, value -> {
-            if (probeGeneration != webProbeGeneration) {
+            if (probeGeneration != webProbeGeneration || session != webSessions[page]) {
                 Log.d(TAG, "event=web_horizontal_probe_stale generation=" + probeGeneration);
                 return;
             }
-            webHorizontalInteractive = Boolean.parseBoolean(value);
+            webHorizontalInteractive = !"false".equals(value);
             Log.d(TAG, "event=web_horizontal_probe page=" + page
+                    + " session_id=" + session
                     + " interactive=" + webHorizontalInteractive
                     + " result=" + (value == null ? "invalid" : "valid"));
+            if (waitingForWebProbe && !touchInProgress) {
+                waitingForWebProbe = false;
+                ++webProbeGeneration;
+                if (!webHorizontalInteractive) {
+                    requestSwipe(pendingSwipeOffset, pendingSwipeVelocity);
+                }
+            }
         });
     }
 
     @Override
     public boolean onInterceptTouchEvent(MotionEvent event) {
-        // 切页动画期间整段消费但不响应新手势，避免快速输入从半页状态继续切页。
-        if (gesture == GESTURE_PAGER_ANIMATING) {
+        if (gesture == GESTURE_CANCELLED) {
             return true;
         }
         if (drawerProgress > 0.0f || gesture == GESTURE_WEB_HORIZONTAL) {
@@ -432,11 +511,7 @@ public final class SurfaceLinkageLayout extends FrameLayout {
             case MotionEvent.ACTION_DOWN:
                 return true;
             case MotionEvent.ACTION_MOVE:
-                if (gesture == GESTURE_HORIZONTAL && sceneWidth > 0) {
-                    pagerPosition = clamp(startPagerPosition - (event.getX() - downX) / sceneWidth,
-                            0.0f, PAGE_COUNT - 1.0f);
-                    applyPagerState();
-                } else if (gesture == GESTURE_VERTICAL) {
+                if (gesture == GESTURE_VERTICAL) {
                     scrollVerticalBy(lastY - event.getY());
                     lastY = event.getY();
                 }
@@ -444,14 +519,7 @@ public final class SurfaceLinkageLayout extends FrameLayout {
             case MotionEvent.ACTION_UP:
                 if (gesture == GESTURE_HORIZONTAL) {
                     velocityTracker.computeCurrentVelocity(1000, dp(4000));
-                    final float velocityX = velocityTracker.getXVelocity();
-                    int target = Math.round(pagerPosition);
-                    if (Math.abs(velocityX) > dp(800)) {
-                        target = velocityX < 0.0f
-                                ? Math.min(PAGE_COUNT - 1, Math.round(startPagerPosition) + 1)
-                                : Math.max(0, Math.round(startPagerPosition) - 1);
-                    }
-                    animatePagerTo(target);
+                    requestSwipe(event.getX() - downX, velocityTracker.getXVelocity());
                 } else if (gesture == GESTURE_VERTICAL) {
                     startVerticalFling();
                 } else if (gesture == GESTURE_NONE) {
@@ -460,9 +528,8 @@ public final class SurfaceLinkageLayout extends FrameLayout {
                 gesture = GESTURE_NONE;
                 return true;
             case MotionEvent.ACTION_CANCEL:
-                if (gesture == GESTURE_HORIZONTAL) {
-                    animatePagerTo(Math.round(startPagerPosition));
-                }
+                Log.d(TAG, "event=gesture_cancel reason=system_cancel owner="
+                        + gestureName(gesture));
                 stopFling();
                 gesture = GESTURE_NONE;
                 return true;
@@ -474,6 +541,17 @@ public final class SurfaceLinkageLayout extends FrameLayout {
     @Override
     public boolean performClick() {
         return super.performClick();
+    }
+
+    private void requestSwipe(float offset, float velocity) {
+        // 与鸿蒙保持相同的抬手判决：末段快甩或足够位移只推进一页。动画是分页
+        // 进度的唯一写入者，因此连续 MOVE 不会与上一段切页动画争写各 Surface。
+        final boolean fling = Math.abs(offset) > dp(12) && Math.abs(velocity) >= dp(800);
+        if (Math.abs(offset) < dp(40) && !fling) {
+            return;
+        }
+        final float direction = fling ? velocity : offset;
+        animatePagerTo(requestedPage + (direction < 0.0f ? 1 : -1));
     }
 
     private float outerMaxOffset() {
@@ -583,10 +661,26 @@ public final class SurfaceLinkageLayout extends FrameLayout {
             return;
         }
         final int targetPage = Math.max(0, Math.min(page, PAGE_COUNT - 1));
-        stopFling();
-        if (pagerAnimator != null) {
-            pagerAnimator.cancel();
+        if (targetPage == requestedPage || drawerProgress > 0.0f
+                || (drawerAnimator != null && drawerAnimator.isRunning())) {
+            return;
         }
+        stopFling();
+        requestedPage = targetPage;
+        if (isPagerAnimating()) {
+            Log.d(TAG, "event=page_change_queued page=" + targetPage
+                    + " animation_target=" + pagerTarget);
+            return;
+        }
+        startPagerAnimation(targetPage);
+    }
+
+    private void startPagerAnimation(int targetPage) {
+        if (targetPage == activePage) {
+            return;
+        }
+        final int generation = ++pagerGeneration;
+        pagerTarget = targetPage;
         if (Math.abs(targetPage - activePage) > 1) {
             // 跨多个 Tab 直接交换首尾页面，不让中间 WebView/Surface 逐页穿过。
             pagerPosition = targetPage;
@@ -600,8 +694,9 @@ public final class SurfaceLinkageLayout extends FrameLayout {
         }
         final float start = pagerPosition;
         final float target = targetPage;
+        final long startedAt = SystemClock.uptimeMillis();
         pagerAnimator = ValueAnimator.ofFloat(start, target);
-        pagerAnimator.setDuration(220L);
+        pagerAnimator.setDuration(160L);
         pagerAnimator.setInterpolator(new DecelerateInterpolator());
         pagerAnimator.addUpdateListener(animation -> {
             pagerPosition = (float) animation.getAnimatedValue();
@@ -618,19 +713,40 @@ public final class SurfaceLinkageLayout extends FrameLayout {
 
                     @Override
                     public void onAnimationEnd(Animator animation) {
-                        if (cancelled) {
+                        if (cancelled || generation != pagerGeneration || animation != pagerAnimator) {
                             return;
                         }
+                        pagerAnimator = null;
                         pagerPosition = target;
                         activePage = targetPage;
                         applyPagerState();
                         updateTabState();
                         Log.i(TAG, "event=page_changed page=" + activePage
+                                + " elapsed_ms=" + (SystemClock.uptimeMillis() - startedAt)
                                 + " outer_offset=" + outerOffset
                                 + " content_offset=" + activeContentOffset());
+                        // 只在同一动画结束后衔接最新目标，不清空已经开始的下一段
+                        // 触摸；其受理不依赖原生 Tab 何时更新选中外观。
+                        startPagerAnimation(requestedPage);
                     }
                 });
         pagerAnimator.start();
+        Log.i(TAG, "event=page_change_requested page=" + targetPage + " animate=true");
+    }
+
+    private void settlePager(int page, String reason) {
+        ++pagerGeneration;
+        if (pagerAnimator != null) {
+            pagerAnimator.cancel();
+            pagerAnimator = null;
+        }
+        requestedPage = Math.max(0, Math.min(page, PAGE_COUNT - 1));
+        pagerTarget = requestedPage;
+        activePage = requestedPage;
+        pagerPosition = requestedPage;
+        applyPagerState();
+        updateTabState();
+        Log.d(TAG, "event=page_animation_settled page=" + activePage + " reason=" + reason);
     }
 
     private void applyPagerState() {
@@ -651,9 +767,8 @@ public final class SurfaceLinkageLayout extends FrameLayout {
             return;
         }
         stopFling();
-        if (pagerAnimator != null) {
-            pagerAnimator.cancel();
-        }
+        cancelTouchProbe("drawer");
+        settlePager(activePage, "drawer");
         if (drawerAnimator != null) {
             drawerAnimator.cancel();
         }
@@ -694,9 +809,32 @@ public final class SurfaceLinkageLayout extends FrameLayout {
         drawerBlocker.setVisibility(drawerProgress > 0.0f ? VISIBLE : GONE);
     }
 
+    private void cancelTouchProbe(String reason) {
+        ++webProbeGeneration;
+        touchInProgress = false;
+        waitingForWebProbe = false;
+        webHorizontalInteractive = null;
+        gesture = GESTURE_NONE;
+        Log.d(TAG, "event=gesture_cancel reason=" + reason);
+    }
+
+    @Override
+    protected void onWindowVisibilityChanged(int visibility) {
+        super.onWindowVisibilityChanged(visibility);
+        if (visibility != VISIBLE && contentViewport != null) {
+            // 后台不继续消费排队请求，直接落定最新已确认目标；恢复时不等待旧
+            // 动画回调。单指尚未 UP 的操作只取消，不生成新的切页或滚动惯性。
+            stopFling();
+            cancelTouchProbe("window_hidden");
+            settlePager(requestedPage, "window_hidden");
+        }
+    }
+
     @Override
     protected void onDetachedFromWindow() {
         stopFling();
+        cancelTouchProbe("detach");
+        ++pagerGeneration;
         if (pagerAnimator != null) {
             pagerAnimator.cancel();
         }
@@ -764,6 +902,7 @@ public final class SurfaceLinkageLayout extends FrameLayout {
         if (owner == GESTURE_HORIZONTAL) return "horizontal";
         if (owner == GESTURE_VERTICAL) return "vertical";
         if (owner == GESTURE_WEB_HORIZONTAL) return "web_horizontal";
+        if (owner == GESTURE_CANCELLED) return "cancelled";
         return "none";
     }
 }
