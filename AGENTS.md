@@ -1,6 +1,6 @@
 # AGENTS.md
 
-本文件仅约束本仓库内的实现、调试、验证和文档维护，不代表项目引入 Agent 产品功能。当前架构评审方案见 `docs/linked-view-architecture.md`；方案处于待审阅状态时，不得提前实施其中的功能。
+本文件仅约束本仓库内的实现、调试、验证和文档维护，不代表项目引入 Agent 产品功能。产品目标与阶段方向见 `docs/roadmap.md`，当前普通联动视图的架构评审方案见 `docs/linked-view-architecture.md`；处于待审阅状态的计划不得提前实施。
 
 ## 1. 项目目标与边界
 
