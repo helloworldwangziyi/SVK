@@ -1,6 +1,6 @@
 # 跨 Android、鸿蒙的细粒度 Surface SDK 方案
 
-> 状态：**待审阅，未批准实施**。
+> 状态：**已批准实施，按阶段验收**。
 >
 > 公共单元是单个 WebView 或 Native Surface；上层决定数量、内容及组合关系。当前多 Surface 场景通过可选联动布局组合这些单元，后续由各自的 Widget 管理。
 
@@ -245,13 +245,12 @@ core/src/
   linked_layout.h                 # 可选成员组合、分页与菜单控制协议
   linked_page_state.*             # 已验证的公共分页转换
 platform/android/
-  java/com/estarx/vulkan/          # 单 Surface、联动父容器、手势与动画
+  java/com/estarx/vulkan/          # 单 Surface、联动父容器、通用宿主、手势与动画
   cpp/                            # JNI、实例注册与资源生命周期
-  host/                           # 通用 Activity、资源与 Gradle 宿主
 platform/hongmeng/
-  ets/                            # 单 Web/Native 组件、联动布局、ArkUI 手势
+  src/main/ets/host/              # 单 Web/Native 对象、联动布局、通用宿主与 ArkUI 手势
+  src/main/ets/vulkan/            # 动态 XComponent 薄壳
   cpp/                            # NAPI、对象身份与 XComponent 生命周期
-  host/                           # 通用 Ability、资源与 Hvigor 宿主
 samples/<app>/
   app.cpp、*.h                    # 创建 Surface、页面列表、组合、绘制与业务事件
 ```

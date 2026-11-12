@@ -2,7 +2,7 @@ package com.estarx.vulkan;
 
 import android.view.Surface;
 
-/** JNI 薄桥：按调用方给出的 Surface ID 转发生命周期，不包含场景或绘制业务。 */
+/** JNI 薄桥：按宿主和对象身份转发，不包含页面数量或场景业务。 */
 public final class NativeBridge {
     static {
         System.loadLibrary("estarx_vulkan");
@@ -11,18 +11,24 @@ public final class NativeBridge {
     private NativeBridge() {}
 
     public static native void nativeSetLogDirectory(String directory);
+    public static native long nativeCreateHost();
+    public static native void nativeDestroyHost(long hostId);
+    public static native String nativeGetSceneSpec();
 
-    /** surfaceId 由示例固定分配；同一 ID 重复调用表示挂起后的热恢复。 */
-    public static native void nativeInit(int surfaceId, Surface surface);
+    /** generation 标识一次系统 Surface 实例；contentId 只映射 App 绘制内容。 */
+    public static native void nativeInit(
+            long hostId, long generation, int contentId, Surface surface);
+    public static native void nativeResize(long hostId, long generation, int width, int height);
+    public static native void nativeBeginFrame(long hostId, long generation, long frameTimeNanos);
+    public static native void nativeDestroy(long hostId, long generation);
 
-    public static native void nativeResize(int surfaceId, int width, int height);
-
-    /** 静态示例只在创建和尺寸变化时调用；连续动画场景可由 VSync 逐帧调用。 */
-    public static native void nativeBeginFrame(int surfaceId, long frameTimeNanos);
-
-    /** 只挂起指定 Surface，不影响同进程中的其他 Surface。 */
-    public static native void nativeDestroy(int surfaceId);
-
-    /** Activity 最终销毁时释放全部 Surface 与 App。 */
-    public static native void nativeShutdown();
+    public static native long nativeCreatePageState(long[] pageIds, long initialPage);
+    public static native void nativeDestroyPageState(long handle);
+    /** 返回 11 个字段：type/from/target/active/requested/generation/count/fromPage/targetPage/activePage/requestedPage。 */
+    public static native long[] nativePageSelect(long handle, long pageId);
+    public static native long[] nativePageComplete(long handle, long generation);
+    /** 返回 active/target/requested/generation/animating/pageCount。 */
+    public static native long[] nativePageSettle(long handle, long pageId);
+    public static native long[] nativePageReplace(long handle, long[] pageIds);
+    public static native long[] nativePageState(long handle);
 }

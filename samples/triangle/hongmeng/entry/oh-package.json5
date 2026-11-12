@@ -5,5 +5,7 @@
   "main": "",
   "author": "",
   "license": "",
-  "dependencies": {}
+  "dependencies": {
+    "svkplatform": "file:../../../../platform/hongmeng"
+  }
 }

@@ -1,0 +1,12 @@
+{
+  "module": {
+    "name": "svkplatform",
+    "type": "har",
+    "description": "SVK linked Surface platform components",
+    "deviceTypes": [
+      "phone",
+      "tablet",
+      "2in1"
+    ]
+  }
+}

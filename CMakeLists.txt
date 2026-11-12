@@ -31,6 +31,8 @@ execute_process(
 
 # ---- 引擎核心静态库（平台无关） ----
 add_library(svk_core STATIC
+    core/src/linked_page_state.cpp
+    core/src/linked_scene.cpp
     core/src/renderer.cpp
     core/src/gpu/vulkan/vulkan_context.cpp
     core/src/gpu/vulkan/swapchain.cpp

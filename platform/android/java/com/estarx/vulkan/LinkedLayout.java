@@ -1,10 +1,9 @@
-package com.estarx.vulkanhost;
+package com.estarx.vulkan;
 
 import android.animation.Animator;
 import android.animation.AnimatorListenerAdapter;
 import android.animation.ValueAnimator;
 import android.content.Context;
-import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.os.SystemClock;
 import android.util.Log;
@@ -15,53 +14,47 @@ import android.view.View;
 import android.view.ViewConfiguration;
 import android.view.animation.DecelerateInterpolator;
 import android.webkit.WebView;
-import android.webkit.WebViewClient;
 import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.OverScroller;
 import android.widget.TextView;
 
-import com.estarx.vulkan.VulkanSurfaceView;
-
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 /**
- * Android 专用多 Surface 联动探针，不是公共 UI 抽象。
- *
- * Header 占满 TopBar 下的视口，WebView 使用 Tab 置顶后的实际可见高度，
- * 初始位于屏幕外。纵向只由本类修改外层/Web/Native 偏移；网页内部可横滑的
- * 区域优先消费横向手势，其他区域才切换页面。菜单与页面动画各自只用一个进度。
+ * Android 联动父容器。成员由宿主创建并持有，本类只绑定稳定 PageId、处理手势、
+ * 滚动和组内几何；页面决策由 core 状态机负责，动画由平台唯一执行源负责。
  */
-public final class SurfaceLinkageLayout extends FrameLayout {
+public final class LinkedLayout extends FrameLayout {
     private static final String TAG = "SVK-SurfaceProbe";
-    private static final int HEADER_SURFACE_ID = 0;
-    private static final int NATIVE_SURFACE_ID = 1;
-    private static final int MENU_SURFACE_ID = 2;
-    private static final int WEB_PAGE_COUNT = 4;
-    private static final int PAGE_NATIVE = 4;
-    private static final int PAGE_COUNT = 5;
     private static final int GESTURE_NONE = 0;
     private static final int GESTURE_HORIZONTAL = 1;
     private static final int GESTURE_VERTICAL = 2;
     private static final int GESTURE_WEB_HORIZONTAL = 3;
     private static final int GESTURE_CANCELLED = 4;
 
-    private static final String[] WEB_PATHS = {"notice", "relevance", "rank", "f10"};
-    private static final String[] TAB_TITLES = {"资讯", "关联", "排行", "F10", "绿色"};
-
+    private final long layoutId;
+    private final long headerId;
+    private final long drawerId;
+    private final long pageStateHandle;
+    private final NativeSurface headerMember;
+    private final NativeSurface drawerMember;
     private final FrameLayout scene;
     private final FrameLayout scrollGroup;
     private final LinearLayout tabBar;
     private final FrameLayout contentViewport;
     private final FrameLayout menuContainer;
     private final VulkanSurfaceView headerSurface;
-    private final VulkanSurfaceView nativeSurface;
     private final VulkanSurfaceView menuSurface;
-    private final ArrayList<WebView> webViews = new ArrayList<>();
+    private final ArrayList<PageBinding> pages = new ArrayList<>();
     private final ArrayList<Button> tabButtons = new ArrayList<>();
-    private final float[] webOffsets = new float[WEB_PAGE_COUNT];
-    private final int[] webSessions = new int[WEB_PAGE_COUNT];
+    private float[] webOffsets = new float[0];
     private final View drawerBlocker;
     private final OverScroller scroller;
     private final int touchSlop;
@@ -77,13 +70,11 @@ public final class SurfaceLinkageLayout extends FrameLayout {
     private int contentHeight;
     private int drawerWidth;
     private int gesture = GESTURE_NONE;
+    private boolean closed;
     private int activePage = 0;
-    // 已落定页、正在执行的目标和最新有效意图分别维护；Tab 只展示 activePage。
-    // 动画期间的新横滑基于 requestedPage 继续推进，所有 Surface 仍由唯一的
-    // pagerPosition 驱动，不让 MOVE 与 ValueAnimator 同时写入分页进度。
     private int requestedPage = 0;
     private int pagerTarget = 0;
-    private int pagerGeneration;
+    private long pagerGeneration;
     private int touchContentPage = -1;
     private boolean touchStartedOnWeb;
     private boolean touchInProgress;
@@ -97,7 +88,6 @@ public final class SurfaceLinkageLayout extends FrameLayout {
     private float pendingSwipeVelocity;
     private float pagerPosition;
     private float outerOffset;
-    private float nativeOffset;
     private float drawerProgress;
     private int lastFlingY;
 
@@ -116,8 +106,25 @@ public final class SurfaceLinkageLayout extends FrameLayout {
                 }
             };
 
-    public SurfaceLinkageLayout(Context context) {
+    public LinkedLayout(
+            Context context, long layoutId, NativeSurface header,
+            List<PageBinding> initialPages, NativeSurface drawer, long initialPageId) {
         super(context);
+        if (initialPages.isEmpty()) throw new IllegalArgumentException("pages must not be empty");
+        this.layoutId = layoutId;
+        this.headerMember = header;
+        this.drawerMember = drawer;
+        this.headerId = header.ref.id;
+        this.drawerId = drawer == null ? 0 : drawer.ref.id;
+        pages.addAll(initialPages);
+        webOffsets = new float[pages.size()];
+        activePage = Math.max(0, indexOfPage(initialPageId));
+        requestedPage = activePage;
+        pagerTarget = activePage;
+        pagerPosition = activePage;
+        pageStateHandle = NativeBridge.nativeCreatePageState(pageIds(), initialPageId);
+        if (pageStateHandle == 0) throw new IllegalArgumentException("invalid page state");
+
         setClipChildren(false);
         setBackgroundColor(Color.WHITE);
         touchSlop = ViewConfiguration.get(context).getScaledTouchSlop();
@@ -128,65 +135,40 @@ public final class SurfaceLinkageLayout extends FrameLayout {
         scene = new FrameLayout(context);
         scene.setClipChildren(true);
         addView(scene, new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
-
         scrollGroup = new FrameLayout(context);
-        // Tab/内容初始在 scrollGroup 下边界外，这里不能提前裁剪；屏幕边界由
-        // 不参与纵向滚动的 scene 统一裁剪，否则子 View 平移后仍无法进入。
         scrollGroup.setClipChildren(false);
-        scene.addView(
-                scrollGroup,
+        scene.addView(scrollGroup,
                 new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
 
-        headerSurface = new VulkanSurfaceView(context, HEADER_SURFACE_ID, false);
+        bindMember(header);
+        headerSurface = header.nativeView();
         scrollGroup.addView(headerSurface);
 
         tabBar = new LinearLayout(context);
         tabBar.setOrientation(LinearLayout.HORIZONTAL);
         tabBar.setGravity(Gravity.CENTER);
         tabBar.setBackgroundColor(Color.WHITE);
-        for (int page = 0; page < PAGE_COUNT; ++page) {
-            Button tab = makeTab(context, TAB_TITLES[page], page);
-            tabButtons.add(tab);
-            tabBar.addView(
-                    tab, new LinearLayout.LayoutParams(0, LayoutParams.MATCH_PARENT, 1.0f));
-        }
         contentViewport = new FrameLayout(context);
         contentViewport.setClipChildren(true);
         contentViewport.setBackgroundColor(Color.WHITE);
         scrollGroup.addView(contentViewport);
-
-        for (int page = 0; page < WEB_PAGE_COUNT; ++page) {
-            WebView webView = createWebView(context, page);
-            webViews.add(webView);
-            contentViewport.addView(
-                    webView,
-                    new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
-            webView.loadUrl(webUrl(WEB_PATHS[page]));
+        for (int page = 0; page < pages.size(); ++page) {
+            addPageViews(page);
         }
-
-        nativeSurface = new VulkanSurfaceView(context, NATIVE_SURFACE_ID, false);
-        contentViewport.addView(nativeSurface);
-
-        // Tab 在内容之后加入；绿色 Surface 内部上滑与 Tab 区域重叠时仍由 Tab 盖住内容。
-        scrollGroup.addView(
-                tabBar,
-                new LayoutParams(LayoutParams.MATCH_PARENT, tabHeight));
+        scrollGroup.addView(tabBar, new LayoutParams(LayoutParams.MATCH_PARENT, tabHeight));
 
         LinearLayout topBar = new LinearLayout(context);
         topBar.setOrientation(LinearLayout.HORIZONTAL);
         topBar.setGravity(Gravity.CENTER_VERTICAL);
         topBar.setBackgroundColor(Color.WHITE);
         TextView title = new TextView(context);
-        title.setText("Surface Probe");
-        title.setTextColor(Color.DKGRAY);
-        title.setTextSize(16.0f);
+        title.setVisibility(GONE);
         topBar.addView(title, new LinearLayout.LayoutParams(0, LayoutParams.MATCH_PARENT, 1.0f));
         Button menuButton = new Button(context);
         menuButton.setText("MENU");
         menuButton.setOnClickListener(v -> animateDrawer(1.0f));
         topBar.addView(menuButton, new LinearLayout.LayoutParams(dp(88), LayoutParams.MATCH_PARENT));
-        scene.addView(
-                topBar,
+        scene.addView(topBar,
                 new LayoutParams(LayoutParams.MATCH_PARENT, topBarHeight, Gravity.TOP));
 
         drawerBlocker = new View(context);
@@ -196,64 +178,62 @@ public final class SurfaceLinkageLayout extends FrameLayout {
         addView(drawerBlocker, new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
 
         menuContainer = new FrameLayout(context);
-        menuSurface = new VulkanSurfaceView(context, MENU_SURFACE_ID, false);
-        // 菜单必须位于 WebView 和其他 Surface 之上；关闭入口是点击菜单外的 blocker。
-        menuSurface.setZOrderOnTop(true);
-        menuContainer.addView(
-                menuSurface,
-                new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
+        menuSurface = drawer == null ? null : drawer.nativeView();
+        menuButton.setVisibility(menuSurface == null ? GONE : VISIBLE);
+        if (drawer != null) {
+            bindMember(drawer);
+            menuSurface.setZOrderOnTop(true);
+            menuContainer.addView(menuSurface,
+                    new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
+        }
         addView(menuContainer);
-
         updateTabState();
     }
 
-    private static String webUrl(String path) {
-        // URL 与参数格式取自参考项目 K 线页；合约取 market_catalog.h 的 CFFEX|F|IF。
-        return "https://news.epolestar.xyz/" + path + "?isEstarX=1"
-                + "&contractNo=CFFEX%7CF%7CIF&theme=0&contractName=IF";
+    private void bindMember(PlatformSurface surface) {
+        final SurfaceResult result = surface.bindLayout(layoutId);
+        if (!result.ok()) throw new IllegalArgumentException("surface already bound");
+        surface.mount();
     }
 
-    private WebView createWebView(Context context, int page) {
-        WebView webView = new LinkedWebView(context);
-        webView.setBackgroundColor(Color.WHITE);
-        webView.setOverScrollMode(OVER_SCROLL_NEVER);
-        webView.setVerticalScrollBarEnabled(false);
-        webView.setHorizontalScrollBarEnabled(false);
-        webView.setNestedScrollingEnabled(false);
-        webView.getSettings().setJavaScriptEnabled(true);
-        webView.getSettings().setDomStorageEnabled(true);
-        webView.getSettings().setLoadWithOverviewMode(true);
-        webView.getSettings().setUseWideViewPort(true);
-        webView.setWebContentsDebuggingEnabled(true);
-        webView.setWebViewClient(
-                new WebViewClient() {
-                    @Override
-                    public void onPageStarted(WebView view, String url, Bitmap favicon) {
-                        ++webSessions[page];
-                        if (touchContentPage == page) {
-                            ++webProbeGeneration;
-                            waitingForWebProbe = false;
-                            webHorizontalInteractive = true;
-                        }
-                        Log.i(TAG, "event=web_load_started page=" + page
-                                + " session_id=" + webSessions[page]);
-                    }
+    private void addPageViews(int page) {
+        final PageBinding binding = pages.get(page);
+        bindMember(binding.surface);
+        contentViewport.addView(binding.surface.view(),
+                new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
+        Button tab = makeTab(getContext(), binding.title, page);
+        tabButtons.add(tab);
+        tabBar.addView(tab, new LinearLayout.LayoutParams(0, LayoutParams.MATCH_PARENT, 1.0f));
+        if (!binding.isWeb()) return;
+        binding.web().setListener(new WebSurface.Listener() {
+            @Override
+            public void onPageStarted(WebSurface surface) {
+                final int index = indexOfSurface(surface);
+                if (touchContentPage == index) {
+                    ++webProbeGeneration;
+                    waitingForWebProbe = false;
+                    webHorizontalInteractive = true;
+                }
+                Log.i(TAG, "event=web_load_started page=" + index
+                        + " session_id=" + surface.documentSession());
+            }
 
-                    @Override
-                    public void onPageFinished(WebView view, String url) {
-                        webOffsets[page] = clamp(webOffsets[page], 0.0f, webContentMax(page));
-                        applyScrollState();
-                        Log.i(TAG, "event=web_loaded page=" + page
-                                + " content_max=" + webContentMax(page));
-                    }
+            @Override
+            public void onPageFinished(WebSurface surface) {
+                final int index = indexOfSurface(surface);
+                if (index < 0 || index >= pages.size()) return;
+                webOffsets[index] = clamp(webOffsets[index], 0.0f, webContentMax(index));
+                applyScrollState();
+                Log.i(TAG, "event=web_loaded page=" + index
+                        + " content_max=" + webContentMax(index));
+            }
 
-                    @Override
-                    public void onReceivedError(WebView view, int errorCode,
-                                                String description, String failingUrl) {
-                        Log.w(TAG, "event=web_load_failed page=" + page + " code=" + errorCode);
-                    }
-                });
-        return webView;
+            @Override
+            public void onError(WebSurface surface, int errorCode) {
+                Log.w(TAG, "event=web_load_failed page=" + indexOfSurface(surface)
+                        + " code=" + errorCode);
+            }
+        });
     }
 
     private Button makeTab(Context context, String title, int page) {
@@ -270,7 +250,9 @@ public final class SurfaceLinkageLayout extends FrameLayout {
                 MeasureSpec.getSize(heightMeasureSpec) - topBarHeight - tabHeight);
         // 必须在测量前固定 WebView 的实际可见高度；初始 MATCH_PARENT 会让 Chromium
         // 按整个窗口高度限制 scrollTo，导致最后一段内容无法滚入屏幕。
-        for (WebView webView : webViews) {
+        for (PageBinding page : pages) {
+            if (!page.isWeb()) continue;
+            WebView webView = page.webView();
             LayoutParams params = (LayoutParams) webView.getLayoutParams();
             if (params.height != webViewHeight) {
                 params.height = webViewHeight;
@@ -308,23 +290,22 @@ public final class SurfaceLinkageLayout extends FrameLayout {
         contentParams.topMargin = topBarHeight + headerHeight;
         contentViewport.setLayoutParams(contentParams);
 
-        LayoutParams nativeParams = (LayoutParams) nativeSurface.getLayoutParams();
-        nativeParams.width = w;
-        // 绿色内容只占一个完整视口；置顶后可见高度还要减去 Tab，不能按两倍
-        // 内容高继续上移，否则 Surface 底边越过屏幕底部后会露出白色背景。
-        nativeParams.height = contentHeight;
-        nativeSurface.setLayoutParams(nativeParams);
+        for (int page = 0; page < pages.size(); ++page) {
+            if (!pages.get(page).isWeb()) {
+                View nativeView = pages.get(page).surface.view();
+                LayoutParams nativeParams = (LayoutParams) nativeView.getLayoutParams();
+                nativeParams.width = w;
+                nativeParams.height = contentHeight;
+                nativeView.setLayoutParams(nativeParams);
+            }
+            webOffsets[page] = clamp(webOffsets[page], 0.0f, webContentMax(page));
+        }
 
         LayoutParams menuParams = (LayoutParams) menuContainer.getLayoutParams();
         menuParams.width = drawerWidth;
         menuParams.height = h;
         menuParams.leftMargin = w;
         menuContainer.setLayoutParams(menuParams);
-
-        nativeOffset = clamp(nativeOffset, 0.0f, nativeContentMax());
-        for (int page = 0; page < WEB_PAGE_COUNT; ++page) {
-            webOffsets[page] = clamp(webOffsets[page], 0.0f, webContentMax(page));
-        }
         outerOffset = clamp(outerOffset, 0.0f, outerMaxOffset());
         applyScrollState();
         applyPagerState();
@@ -356,7 +337,7 @@ public final class SurfaceLinkageLayout extends FrameLayout {
             touchInProgress = true;
             waitingForWebProbe = false;
             touchContentPage = findTouchedContentPage(event);
-            touchStartedOnWeb = touchContentPage >= 0 && touchContentPage < WEB_PAGE_COUNT;
+            touchStartedOnWeb = touchContentPage >= 0 && pages.get(touchContentPage).isWeb();
             webHorizontalInteractive = null;
             final int probeGeneration = ++webProbeGeneration;
             if (touchStartedOnWeb) {
@@ -430,12 +411,10 @@ public final class SurfaceLinkageLayout extends FrameLayout {
         if (!containsTouch(contentViewport, event)) {
             return -1;
         }
-        for (int page = 0; page < WEB_PAGE_COUNT; ++page) {
-            if (containsTouch(webViews.get(page), event)) {
-                return page;
-            }
+        for (int page = 0; page < pages.size(); ++page) {
+            if (containsTouch(pages.get(page).surface.view(), event)) return page;
         }
-        return containsTouch(nativeSurface, event) ? PAGE_NATIVE : -1;
+        return -1;
     }
 
     private boolean containsTouch(View view, MotionEvent event) {
@@ -451,8 +430,9 @@ public final class SurfaceLinkageLayout extends FrameLayout {
     }
 
     private void probeWebHorizontalInteraction(MotionEvent event, int page, int probeGeneration) {
-        final int session = webSessions[page];
-        final WebView webView = webViews.get(page);
+        final WebSurface web = pages.get(page).web();
+        final int session = web.documentSession();
+        final WebView webView = web.webView();
         final int[] location = new int[2];
         webView.getLocationOnScreen(location);
         final float scale = webView.getScale();
@@ -475,7 +455,7 @@ public final class SurfaceLinkageLayout extends FrameLayout {
                 + "||s.overflowX==='scroll'||e===document.documentElement))return true;"
                 + "e=e.parentElement;}return false;})()";
         webView.evaluateJavascript(script, value -> {
-            if (probeGeneration != webProbeGeneration || session != webSessions[page]) {
+            if (probeGeneration != webProbeGeneration || session != web.documentSession()) {
                 Log.d(TAG, "event=web_horizontal_probe_stale generation=" + probeGeneration);
                 return;
             }
@@ -586,38 +566,36 @@ public final class SurfaceLinkageLayout extends FrameLayout {
         headerSurface.setTranslationY(-outerOffset);
         tabBar.setTranslationY(-outerOffset);
         contentViewport.setTranslationY(-outerOffset);
-        for (int page = 0; page < WEB_PAGE_COUNT; ++page) {
-            WebView webView = webViews.get(page);
+        for (int page = 0; page < pages.size(); ++page) {
+            final PageBinding binding = pages.get(page);
             final int targetY = Math.round(webOffsets[page]);
-            if (webView.getScrollY() != targetY) {
-                // 网页横向手势归 Chromium，因此竖向定位必须保留网页自己的横向偏移。
-                webView.scrollTo(webView.getScrollX(), targetY);
+            if (binding.isWeb()) {
+                WebView webView = binding.webView();
+                if (webView.getScrollY() != targetY) {
+                    webView.scrollTo(webView.getScrollX(), targetY);
+                }
+            } else {
+                binding.surface.view().setTranslationY(-webOffsets[page]);
             }
         }
-        nativeSurface.setTranslationY(-nativeOffset);
     }
 
     private float activeContentOffset() {
-        return activePage < WEB_PAGE_COUNT ? webOffsets[activePage] : nativeOffset;
+        return webOffsets[activePage];
     }
 
     private void setActiveContentOffset(float value) {
-        if (activePage < WEB_PAGE_COUNT) {
-            webOffsets[activePage] = clamp(value, 0.0f, webContentMax(activePage));
-        } else {
-            nativeOffset = clamp(value, 0.0f, nativeContentMax());
-        }
+        webOffsets[activePage] = clamp(value, 0.0f, activeContentMax());
     }
 
     private float activeContentMax() {
-        return activePage < WEB_PAGE_COUNT ? webContentMax(activePage) : nativeContentMax();
+        return webContentMax(activePage);
     }
 
     private float webContentMax(int page) {
-        if (contentHeight <= 0) {
-            return 0.0f;
-        }
-        WebView webView = webViews.get(page);
+        if (contentHeight <= 0) return 0.0f;
+        if (!pages.get(page).isWeb()) return nativeContentMax();
+        WebView webView = pages.get(page).webView();
         // Chromium 按实际视口高度钳制 scrollTo，外层必须使用同一个高度。
         return Math.max(0.0f, webView.getContentHeight() * webView.getScale()
                 - webView.getHeight());
@@ -657,41 +635,51 @@ public final class SurfaceLinkageLayout extends FrameLayout {
     }
 
     private void animatePagerTo(int page) {
-        if (sceneWidth == 0) {
-            return;
-        }
-        final int targetPage = Math.max(0, Math.min(page, PAGE_COUNT - 1));
-        if (targetPage == requestedPage || drawerProgress > 0.0f
-                || (drawerAnimator != null && drawerAnimator.isRunning())) {
-            return;
-        }
+        if (sceneWidth == 0 || drawerProgress > 0.0f
+                || (drawerAnimator != null && drawerAnimator.isRunning())) return;
+        final int targetPage = Math.max(0, Math.min(page, pages.size() - 1));
         stopFling();
-        requestedPage = targetPage;
-        if (isPagerAnimating()) {
-            Log.d(TAG, "event=page_change_queued page=" + targetPage
-                    + " animation_target=" + pagerTarget);
-            return;
-        }
-        startPagerAnimation(targetPage);
+        handlePageTransition(NativeBridge.nativePageSelect(
+                pageStateHandle, pages.get(targetPage).pageId));
     }
 
-    private void startPagerAnimation(int targetPage) {
-        if (targetPage == activePage) {
-            return;
+    private void handlePageTransition(long[] transition) {
+        if (transition == null || transition.length < 11 || transition[0] == 0) return;
+        pagerTarget = (int) transition[2];
+        activePage = (int) transition[3];
+        requestedPage = (int) transition[4];
+        switch ((int) transition[0]) {
+            case 1:
+                Log.d(TAG, "event=page_change_queued page=" + requestedPage
+                        + " animation_target=" + pagerTarget);
+                return;
+            case 2:
+                pagerPosition = activePage;
+                applyPagerState();
+                updateTabState();
+                Log.i(TAG, "event=page_changed reason=non_adjacent page=" + activePage);
+                return;
+            case 3:
+                startPagerAnimation(transition);
+                return;
+            case 4:
+                pagerPosition = activePage;
+                applyPagerState();
+                updateTabState();
+                Log.i(TAG, "event=page_changed page=" + activePage
+                        + " outer_offset=" + outerOffset
+                        + " content_offset=" + activeContentOffset());
+                return;
+            default:
+                return;
         }
-        final int generation = ++pagerGeneration;
+    }
+
+    private void startPagerAnimation(long[] transition) {
+        final int targetPage = (int) transition[2];
+        final long generation = transition[5];
+        pagerGeneration = generation;
         pagerTarget = targetPage;
-        if (Math.abs(targetPage - activePage) > 1) {
-            // 跨多个 Tab 直接交换首尾页面，不让中间 WebView/Surface 逐页穿过。
-            pagerPosition = targetPage;
-            activePage = targetPage;
-            applyPagerState();
-            updateTabState();
-            Log.i(TAG, "event=page_changed reason=non_adjacent page=" + activePage
-                    + " outer_offset=" + outerOffset
-                    + " content_offset=" + activeContentOffset());
-            return;
-        }
         final float start = pagerPosition;
         final float target = targetPage;
         final long startedAt = SystemClock.uptimeMillis();
@@ -702,68 +690,145 @@ public final class SurfaceLinkageLayout extends FrameLayout {
             pagerPosition = (float) animation.getAnimatedValue();
             applyPagerState();
         });
-        pagerAnimator.addListener(
-                new AnimatorListenerAdapter() {
-                    private boolean cancelled;
+        pagerAnimator.addListener(new AnimatorListenerAdapter() {
+            private boolean cancelled;
 
-                    @Override
-                    public void onAnimationCancel(Animator animation) {
-                        cancelled = true;
-                    }
+            @Override
+            public void onAnimationCancel(Animator animation) {
+                cancelled = true;
+            }
 
-                    @Override
-                    public void onAnimationEnd(Animator animation) {
-                        if (cancelled || generation != pagerGeneration || animation != pagerAnimator) {
-                            return;
-                        }
-                        pagerAnimator = null;
-                        pagerPosition = target;
-                        activePage = targetPage;
-                        applyPagerState();
-                        updateTabState();
-                        Log.i(TAG, "event=page_changed page=" + activePage
-                                + " elapsed_ms=" + (SystemClock.uptimeMillis() - startedAt)
-                                + " outer_offset=" + outerOffset
-                                + " content_offset=" + activeContentOffset());
-                        // 只在同一动画结束后衔接最新目标，不清空已经开始的下一段
-                        // 触摸；其受理不依赖原生 Tab 何时更新选中外观。
-                        startPagerAnimation(requestedPage);
-                    }
-                });
+            @Override
+            public void onAnimationEnd(Animator animation) {
+                if (cancelled || generation != pagerGeneration || animation != pagerAnimator) return;
+                pagerAnimator = null;
+                pagerPosition = target;
+                applyPagerState();
+                handlePageTransition(NativeBridge.nativePageComplete(pageStateHandle, generation));
+                Log.d(TAG, "event=page_animation_completed page=" + activePage
+                        + " elapsed_ms=" + (SystemClock.uptimeMillis() - startedAt));
+            }
+        });
         pagerAnimator.start();
         Log.i(TAG, "event=page_change_requested page=" + targetPage + " animate=true");
     }
 
     private void settlePager(int page, String reason) {
-        ++pagerGeneration;
+        if (page < 0 || page >= pages.size()) return;
         if (pagerAnimator != null) {
             pagerAnimator.cancel();
             pagerAnimator = null;
         }
-        requestedPage = Math.max(0, Math.min(page, PAGE_COUNT - 1));
-        pagerTarget = requestedPage;
-        activePage = requestedPage;
-        pagerPosition = requestedPage;
+        final long[] state = NativeBridge.nativePageSettle(
+                pageStateHandle, pages.get(page).pageId);
+        requestedPage = indexOfPage(state[2]);
+        pagerTarget = indexOfPage(state[1]);
+        activePage = indexOfPage(state[0]);
+        pagerGeneration = state[3];
+        pagerPosition = activePage;
         applyPagerState();
         updateTabState();
         Log.d(TAG, "event=page_animation_settled page=" + activePage + " reason=" + reason);
     }
 
     private void applyPagerState() {
-        for (int page = 0; page < WEB_PAGE_COUNT; ++page) {
-            webViews.get(page).setTranslationX((page - pagerPosition) * sceneWidth);
+        for (int page = 0; page < pages.size(); ++page) {
+            pages.get(page).surface.view().setTranslationX((page - pagerPosition) * sceneWidth);
         }
-        nativeSurface.setTranslationX((PAGE_NATIVE - pagerPosition) * sceneWidth);
+    }
+
+    private long[] pageIds() {
+        return pageIds(pages);
+    }
+
+    private long[] pageIds(List<PageBinding> bindings) {
+        final long[] ids = new long[bindings.size()];
+        for (int index = 0; index < bindings.size(); ++index) ids[index] = bindings.get(index).pageId;
+        return ids;
+    }
+
+    private int indexOfPage(long pageId) {
+        for (int index = 0; index < pages.size(); ++index) {
+            if (pages.get(index).pageId == pageId) return index;
+        }
+        return -1;
+    }
+
+    private int indexOfSurface(WebSurface surface) {
+        for (int index = 0; index < pages.size(); ++index) {
+            if (pages.get(index).web() == surface) return index;
+        }
+        return -1;
+    }
+
+    public SurfaceResult replacePages(List<PageBinding> replacements) {
+        if (replacements == null || replacements.isEmpty()) {
+            return new SurfaceResult(SurfaceResult.Error.INVALID_LAYOUT);
+        }
+        final Set<Long> pageIds = new HashSet<>();
+        final Set<Long> surfaceIds = new HashSet<>();
+        for (PageBinding page : replacements) {
+            if (page.pageId == 0 || page.surface == null || page.surface.ref.id == 0
+                    || page.surface.state() == PlatformSurface.State.CLOSED) {
+                return new SurfaceResult(SurfaceResult.Error.INVALID_ARGUMENT);
+            }
+            if (page.surface.ref.id == headerId || page.surface.ref.id == drawerId
+                    || !pageIds.add(page.pageId) || !surfaceIds.add(page.surface.ref.id)) {
+                return new SurfaceResult(SurfaceResult.Error.OWNERSHIP_CONFLICT);
+            }
+            if (page.surface.layoutId() != 0 && page.surface.layoutId() != layoutId) {
+                return new SurfaceResult(SurfaceResult.Error.OWNERSHIP_CONFLICT);
+            }
+        }
+        final long[] state = NativeBridge.nativePageReplace(pageStateHandle, pageIds(replacements));
+        if (state == null || state.length < 6 || state[5] == 0) {
+            return new SurfaceResult(SurfaceResult.Error.INVALID_LAYOUT);
+        }
+        stopFling();
+        cancelTouchProbe("replace_pages");
+        if (pagerAnimator != null) {
+            pagerAnimator.cancel();
+            pagerAnimator = null;
+        }
+        final Map<Long, Float> oldOffsets = new HashMap<>();
+        for (int index = 0; index < pages.size(); ++index) {
+            oldOffsets.put(pages.get(index).pageId, webOffsets[index]);
+        }
+        for (PageBinding old : pages) {
+            old.surface.unbindLayout(layoutId);
+            if (!surfaceIds.contains(old.surface.ref.id)) old.surface.suspend();
+        }
+        contentViewport.removeAllViews();
+        tabBar.removeAllViews();
+        tabButtons.clear();
+        pages.clear();
+        pages.addAll(replacements);
+        webOffsets = new float[pages.size()];
+        for (int index = 0; index < pages.size(); ++index) {
+            final Float offset = oldOffsets.get(pages.get(index).pageId);
+            webOffsets[index] = offset == null ? 0.0f : offset;
+            addPageViews(index);
+        }
+        activePage = indexOfPage(state[0]);
+        pagerTarget = indexOfPage(state[1]);
+        requestedPage = indexOfPage(state[2]);
+        pagerGeneration = state[3];
+        pagerPosition = activePage;
+        applyScrollState();
+        applyPagerState();
+        updateTabState();
+        requestLayout();
+        return SurfaceResult.OK;
     }
 
     private void updateTabState() {
-        for (int page = 0; page < PAGE_COUNT; ++page) {
+        for (int page = 0; page < pages.size(); ++page) {
             tabButtons.get(page).setTextColor(page == activePage ? Color.RED : Color.DKGRAY);
         }
     }
 
     private void animateDrawer(float target) {
-        if (drawerWidth == 0) {
+        if (menuSurface == null || drawerWidth == 0) {
             return;
         }
         stopFling();
@@ -832,62 +897,27 @@ public final class SurfaceLinkageLayout extends FrameLayout {
 
     @Override
     protected void onDetachedFromWindow() {
+        close();
+        super.onDetachedFromWindow();
+    }
+
+    /** 关闭只解绑组内关系；成员仍由各自宿主所有，不能在这里销毁 WebView 或 Surface。 */
+    public void close() {
+        if (closed) return;
+        closed = true;
         stopFling();
-        cancelTouchProbe("detach");
+        cancelTouchProbe("close");
         ++pagerGeneration;
-        if (pagerAnimator != null) {
-            pagerAnimator.cancel();
-        }
-        if (drawerAnimator != null) {
-            drawerAnimator.cancel();
-        }
+        if (pagerAnimator != null) pagerAnimator.cancel();
+        if (drawerAnimator != null) drawerAnimator.cancel();
         if (velocityTracker != null) {
             velocityTracker.recycle();
             velocityTracker = null;
         }
-        for (WebView webView : webViews) {
-            webView.stopLoading();
-            webView.destroy();
-        }
-        super.onDetachedFromWindow();
-    }
-
-    /** 单指竖滚由场景协调；网页横向区域和多指图表手势必须继续交给 Chromium。 */
-    private static final class LinkedWebView extends WebView {
-        private float downX;
-        private float downY;
-
-        LinkedWebView(Context context) {
-            super(context);
-        }
-
-        @Override
-        public boolean onTouchEvent(MotionEvent event) {
-            if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
-                downX = event.getX();
-                downY = event.getY();
-            } else if (event.getActionMasked() == MotionEvent.ACTION_MOVE) {
-                final float dx = event.getX() - downX;
-                final float dy = event.getY() - downY;
-                if (event.getPointerCount() == 1 && Math.abs(dy) > Math.abs(dx)) {
-                    return true;
-                }
-            }
-            return super.onTouchEvent(event);
-        }
-
-        @Override
-        public void requestDisallowInterceptTouchEvent(boolean disallowIntercept) {
-            if (!disallowIntercept) {
-                super.requestDisallowInterceptTouchEvent(false);
-            }
-            // Chromium 不知道外层 Tab 边界，不能单独撤销父容器的整段手势归属。
-        }
-
-        @Override
-        public boolean performClick() {
-            return super.performClick();
-        }
+        for (PageBinding page : pages) page.surface.unbindLayout(layoutId);
+        headerMember.unbindLayout(layoutId);
+        if (drawerMember != null) drawerMember.unbindLayout(layoutId);
+        NativeBridge.nativeDestroyPageState(pageStateHandle);
     }
 
     private int dp(float value) {

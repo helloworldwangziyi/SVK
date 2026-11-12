@@ -51,6 +51,18 @@
           ]
         }
       ]
+    },
+    {
+      "name": "svkplatform",
+      "srcPath": "../../platform/hongmeng",
+      "targets": [
+        {
+          "name": "default",
+          "applyToProducts": [
+            "default"
+          ]
+        }
+      ]
     }
   ]
 }

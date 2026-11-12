@@ -41,6 +41,8 @@ add_library(estarx_vulkan SHARED
     ${SVK_APP_SOURCES}
     ${SVK_ROOT}/platform/hongmeng/cpp/hongmeng_napi_bridge.cpp
     ${SVK_ROOT}/platform/hongmeng/cpp/hongmeng_vulkan_platform.cpp
+    ${SVK_ROOT}/core/src/linked_page_state.cpp
+    ${SVK_ROOT}/core/src/linked_scene.cpp
     ${SVK_ROOT}/core/src/renderer.cpp
     ${SVK_ROOT}/core/src/gpu/vulkan/vulkan_context.cpp
     ${SVK_ROOT}/core/src/gpu/vulkan/swapchain.cpp

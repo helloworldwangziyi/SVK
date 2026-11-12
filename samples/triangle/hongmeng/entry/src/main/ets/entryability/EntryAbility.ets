@@ -1,7 +1,6 @@
 import { AbilityConstant, UIAbility, Want } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
-import { nativeBridge } from '../vulkan/VulkanShell';
 
 const TAG = 'estarx-vulkan';
 const DOMAIN = 0x0000;
@@ -12,9 +11,6 @@ export default class EntryAbility extends UIAbility {
   }
 
   onDestroy(): void {
-    // 真正销毁（对照 Android Activity.onDestroy → nativeShutdown）：
-    // 全量释放引擎资源。壳组件先销毁时 g_bridge 已为 null，可选链天然幂等。
-    nativeBridge()?.onShutdown();
     hilog.info(DOMAIN, TAG, '[svk][lifecycle][ability_destroyed]');
   }
 

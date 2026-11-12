@@ -1,0 +1,9 @@
+{
+  "name": "svkplatform",
+  "version": "1.0.0",
+  "description": "SVK linked Surface platform components",
+  "main": "Index.ets",
+  "author": "",
+  "license": "",
+  "dependencies": {}
+}
