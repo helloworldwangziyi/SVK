@@ -15,6 +15,10 @@ struct Index {
   }
 
   build() {
-    SurfaceHost({ controller: this.linkedController })
+    Stack({ alignContent: Alignment.TopStart }) {
+      SurfaceHost({ controller: this.linkedController })
+    }
+    .width('100%')
+    .height('100%')
   }
 }

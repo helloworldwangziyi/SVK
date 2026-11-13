@@ -23,7 +23,8 @@ interface SwipeSample {
 /** 鸿蒙联动父容器：成员由宿主持有，Swiper 只执行分页，纵向保留自然嵌套滚动。 */
 @Component
 export struct LinkedLayout {
-  @Prop spec: LinkedSceneSpecModel | null = null;
+  // spec 含原生控制器，必须共享宿主实例，不能用 @Prop 深拷贝。
+  @Link spec: LinkedSceneSpecModel | null;
   @Prop controller: LinkedLayoutController = new LinkedLayoutController();
   private outerScroller: Scroller = new Scroller();
   private swiperController: SwiperController = new SwiperController();
@@ -113,8 +114,24 @@ export struct LinkedLayout {
     this.touchVelocityX = 0;
   }
 
+  private failWebHorizontalProbe(surface: WebSurfaceModel, pageId: number,
+    generation: number, session: number, reason: string, detail: string = ''): void {
+    if (generation !== this.touchGeneration || session !== surface.documentSession) return;
+    this.webHorizontalInteractive = true;
+    hilog.warn(DOMAIN, TAG,
+      `[event=web_horizontal_probe_failed page=${pageId} session_id=${session} generation=${generation} reason=${reason} detail=${detail} action=keep_web_gesture]`);
+    this.resolveTouchOwner();
+  }
+
   private probeWebHorizontal(surface: WebSurfaceModel, pageId: number,
     x: number, y: number): void {
+    if (!surface.controllerAttached) {
+      this.webHorizontalInteractive = true;
+      hilog.debug(DOMAIN, TAG,
+        `[event=web_horizontal_probe_skipped page=${pageId} session_id=${surface.documentSession} generation=${this.touchGeneration} reason=controller_not_attached action=keep_web_gesture]`);
+      this.resolveTouchOwner();
+      return;
+    }
     const generation = this.touchGeneration;
     const session = surface.documentSession;
     const script = '(function(){var v=window.visualViewport;var scale=' +
@@ -126,24 +143,25 @@ export struct LinkedLayout {
       'if(e.scrollWidth>e.clientWidth+1&&(s.overflowX==="auto"||' +
       's.overflowX==="scroll"||e===document.documentElement))return true;' +
       'e=e.parentElement;}return false;})()';
-    surface.controller.runJavaScript(script).then((value: string) => {
-      if (generation !== this.touchGeneration || session !== surface.documentSession ||
-        this.indexOfPage(pageId) !== this.touchPage) {
+    try {
+      surface.controller.runJavaScript(script).then((value: string) => {
+        if (generation !== this.touchGeneration || session !== surface.documentSession ||
+          this.indexOfPage(pageId) !== this.touchPage) {
+          hilog.debug(DOMAIN, TAG,
+            `[event=web_horizontal_probe_stale page=${pageId} session_id=${session} generation=${generation}]`);
+          return;
+        }
+        this.webHorizontalInteractive = value !== 'false';
         hilog.debug(DOMAIN, TAG,
-          `[event=web_horizontal_probe_stale page=${pageId} session_id=${session} generation=${generation}]`);
-        return;
-      }
-      this.webHorizontalInteractive = value !== 'false';
-      hilog.debug(DOMAIN, TAG,
-        `[event=web_horizontal_probe page=${pageId} session_id=${session} generation=${generation} interactive=${this.webHorizontalInteractive}]`);
-      this.resolveTouchOwner();
-    }).catch(() => {
-      if (generation !== this.touchGeneration || session !== surface.documentSession) return;
-      this.webHorizontalInteractive = true;
-      hilog.warn(DOMAIN, TAG,
-        `[event=web_horizontal_probe_failed page=${pageId} session_id=${session} reason=javascript_failed action=keep_web_gesture]`);
-      this.resolveTouchOwner();
-    });
+          `[event=web_horizontal_probe page=${pageId} session_id=${session} generation=${generation} interactive=${this.webHorizontalInteractive}]`);
+        this.resolveTouchOwner();
+      }).catch(() => {
+        this.failWebHorizontalProbe(surface, pageId, generation, session, 'javascript_failed');
+      });
+    } catch (error) {
+      this.failWebHorizontalProbe(surface, pageId, generation, session, 'javascript_sync_failed',
+        error instanceof Error ? error.message : 'unknown');
+    }
   }
 
   private resolveTouchOwner(): void {
@@ -346,7 +364,9 @@ export struct LinkedLayout {
     this.activePage = this.indexOfPage(state[0]);
     this.pagerTarget = this.indexOfPage(state[1]);
     this.requestedPage = this.indexOfPage(state[2]);
-    setTimeout(() => this.swiperController.changeIndex(this.activePage, false), 0);
+    setTimeout(() => {
+      this.swiperController.changeIndex(this.activePage, false);
+    }, 0);
     return true;
   }
 
@@ -388,6 +408,11 @@ export struct LinkedLayout {
         .nestedScroll({
           scrollForward: NestedScrollMode.PARENT_FIRST,
           scrollBackward: NestedScrollMode.SELF_FIRST
+        })
+        .onControllerAttached(() => {
+          page.web().controllerAttached = true;
+          hilog.debug(DOMAIN, TAG,
+            `[event=web_controller_attached page=${page.pageId} session_id=${page.web().documentSession}]`);
         })
         .onTouch((event: TouchEvent) => this.observePageTouch(
           event, this.indexOfPage(page.pageId), page.web().controller))
@@ -518,7 +543,7 @@ export struct LinkedLayout {
         }
         .width('100%')
         .height(this.contentHeight() + this.tabHeight)
-        .position({ x: 0, y: this.topBarHeight })
+        .offset({ x: 0, y: this.topBarHeight })
         .scrollable(ScrollDirection.Vertical)
         .scrollBar(BarState.Off)
         .edgeEffect(EdgeEffect.None)
@@ -536,7 +561,6 @@ export struct LinkedLayout {
         .width('100%')
         .height(this.topBarHeight)
         .backgroundColor(Color.White)
-        .position({ x: 0, y: 0 })
         .onTouch((event: TouchEvent) => {
           if (event.type === TouchType.Down) this.invalidateTouch('top_bar_down');
         })
@@ -574,8 +598,6 @@ export struct LinkedLayout {
     .width('100%')
     .height('100%')
     .clip(true)
-    .expandSafeArea([SafeAreaType.SYSTEM, SafeAreaType.CUTOUT],
-      [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM, SafeAreaEdge.START, SafeAreaEdge.END])
     .onAreaChange((_old: Area, area: Area) => {
       this.invalidateTouch('resize');
       this.sceneWidth = Number(area.width);

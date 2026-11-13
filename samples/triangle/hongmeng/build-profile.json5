@@ -54,7 +54,7 @@
     },
     {
       "name": "svkplatform",
-      "srcPath": "../../platform/hongmeng",
+      "srcPath": "../../../platform/hongmeng",
       "targets": [
         {
           "name": "default",

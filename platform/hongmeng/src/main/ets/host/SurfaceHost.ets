@@ -47,7 +47,10 @@ export struct SurfaceHost {
         root['initialPage'] as number);
     } catch (error) {
       this.close();
-      throw error;
+      if (error instanceof Error) {
+        throw error;
+      }
+      throw new Error('failed to initialize scene');
     }
   }
 
@@ -103,7 +106,7 @@ export struct SurfaceHost {
 
   build() {
     if (this.spec) {
-      LinkedLayout({ spec: this.spec, controller: this.controller })
+      LinkedLayout({ spec: $spec, controller: this.controller })
     }
   }
 }

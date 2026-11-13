@@ -15,9 +15,8 @@ export default class EntryAbility extends UIAbility {
   }
 
   onWindowStageCreate(windowStage: window.WindowStage): void {
-    // 边到边布局：内容延伸到状态栏/手势条之下（对应 Android 的
-    // WindowCompat.setDecorFitsSystemWindows(false)）。
-    windowStage.getMainWindowSync().setWindowLayoutFullScreen(true);
+    // 交互顶栏交给系统安全区布局，保证可见区域与触摸命中范围一致。
+    windowStage.getMainWindowSync().setWindowLayoutFullScreen(false);
 
     windowStage.loadContent('pages/Index', (err) => {
       if (err.code) {
