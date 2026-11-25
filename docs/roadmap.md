@@ -2,8 +2,8 @@
 
 > 状态：**当前评审方向，待按阶段审阅，不构成提前实施授权**。
 >
-> 本文件以当前讨论的“最小持久 ViewTree、可复用自绘控件、独立导航栈、可复用 SceneHost、
-> 平台组合子树、数据驱动 dirty”为准。
+> 本文件以当前讨论的“最小持久 ViewTree、可复用自绘控件、独立导航栈、纯自绘虚拟 View 导航、
+> 多 Surface SceneHost 有界复用、平台组合子树、数据驱动 dirty”为准。
 > 此前版本与本版不一致时，以本版为后续评审方向；当前联动 Demo 的实现和验收仍以
 > `linked-view-architecture.md` 为基线，不因本规划提前重写。
 
@@ -17,6 +17,9 @@ SVK 的目标不是为 Android、鸿蒙分别维护两套页面，也不是复�
   Canvas 绘制，输入和手势归 View，Surface 不监听输入或手势事件。
 - 使用独立的 Route 栈表达应用导航；导航父子不冒充布局父子。
 - 普通 UI 由现有 Vulkan 路径绘制，WebView、LinkPage 等系统能力由平台宿主接入。
+- C++ 统一描述场景级 Surface 布局意图，包括成员数量、类型、位置、尺寸、裁剪、显隐和层级；
+  平台据此创建并组织真实系统 Surface。单个自绘 Surface 的 Canvas 内容布局与多个系统 Surface
+  之间的组合布局分离，不要求每种页面分别实现 Android、鸿蒙原生布局。
 - Surface 生命周期、系统手势、联动执行和转场动画优先交还平台。
 - 数据与 UI 分离，变化只使相关节点失效，并在下一帧统一布局、绘制和平台更新。
 - 全局环境变化、定向输入、组件语义事件和数据流事件分别处理，不使用无差别 EventBus。
@@ -61,6 +64,7 @@ SVK 的目标不是为 Android、鸿蒙分别维护两套页面，也不是复�
 | 可复用自绘控件 | 没有统一的控件属性、交互状态、语义回调和 Button/Dropdown/Table 实现 |
 | 自绘输入 | 没有公共 Pointer 输入、命中区域和整段输入会话 |
 | 平台组合边界 | 没有把 LinkPage 明确视为平台接管交互的子树 |
+| 场景 Surface 布局 | 独立 Surface 已有 Placement 协议，但当前 SceneSpec/SurfaceHost 不能承载普通 Native+多 Web 分屏等组合 |
 | 场景组合与复用 | 当前 SurfaceHost 只承载固定联动场景，没有按 Route 管理 SceneHost、换绑代次和有界复用 |
 | 帧调度 | 没有将数据、布局、绘制和平台几何合并为按需帧更新 |
 | 全局环境 | 没有主题、语言、折叠状态和关爱模式的统一快照与订阅 |
@@ -375,7 +379,30 @@ HTTP 单次结果、TCP 连接状态、行情快照和有序增量各自有明�
 
 ## 8. 平台组合子树与 Surface 联动
 
-### 8.1 LinkPage 是平台交互所有者
+### 8.1 场景级 Surface 布局与自绘内容布局分离
+
+两种布局通过同一 ViewTree 的布局结果衔接，但不混为同一职责，也不另建通用 Surface 树：
+
+- **场景级 Surface 布局**：App/C++ 根据安全内容视口，确定需要系统合成的 Native、Web 及未来视频
+  成员的数量、类型、bounds、clip、visible、interactive 和有序层级。平台按内容配置创建系统对象，
+  按同一布局结果组织真实 SurfaceView、WebView、XComponent、ArkWeb 或后续视频组件，不各自再计算
+  一套位置，也不要求 App 直接操作这些平台对象。
+- **单个自绘 Surface 的内容布局**：App/C++ 只根据该 Surface 自身的尺寸和状态生成 Canvas，决定
+  其内部图形和控件如何排列。Web 文档仍由 Web 引擎布局，视频内容不由 Canvas 代绘。
+
+场景布局至少应能表达以下普通组合，而不是只能描述当前 Linked Demo：
+
+- 一个自绘 Surface 占满一屏，一个 Web Surface 位于下半屏。
+- 一个自绘 Surface 占满一屏，两个 Web Surface 在下半屏左右排列，分别持有自己的文档和生命周期。
+- 后续视频 Surface 位于画面中间，下方由 Web Surface 承担点赞、评论等功能；视频类型与播放能力
+  仍须按第 9.4 节单独评审，不因布局可表达就视为平台能力已经具备。
+
+普通分屏、共存和覆盖组合不强行套入 `ILinkedLayout` 的 Header、分页、Tab 停靠和抽屉语义；LinkPage
+只是需要平台接管内部交互的特殊组合子树。场景结构或几何变化以同一 frameId、revision 同时驱动
+Native Canvas 和平台成员更新，只改变布局时不默认重建 Surface 或重载 Web 文档。全屏 Native 与 Web
+重叠、多 Surface 层级、裁剪和命中必须通过双端设备探针验收，平台无法实现的组合显式返回不支持。
+
+### 8.2 LinkPage 是平台交互所有者
 
 LinkPage 的第一版边界为：
 
@@ -387,7 +414,7 @@ LinkPage 的第一版边界为：
 
 当前 `LinkedPageState` 可继续承担已验证的内部分页语义，但不能扩张成应用 Route 栈。
 
-### 8.2 安全区、几何和帧一致性
+### 8.3 安全区、几何和帧一致性
 
 - 页面外层宿主先生成安全内容视口，ViewTree 和各 Surface 不分别查询、叠加安全区。
 - core 必须保留平台中立的 bounds、clip、visible、interactive，否则无法完成布局和事件命中。
@@ -395,7 +422,7 @@ LinkPage 的第一版边界为：
 - WebView 保持系统合成，不纹理化、不像素回读、不用原生位图代绘。
 - Surface 重建使旧 generation 失效，Web 异步事件继续校验 documentSession。
 
-### 8.3 前后台、隐藏和关闭
+### 8.4 前后台、隐藏和关闭
 
 暂时隐藏与永久关闭分离：
 
@@ -419,11 +446,16 @@ LinkPage 的第一版边界为：
 
 快速重复操作必须明确拒绝、合并到最新目标或保留一个有界待处理意图，不能按点击次数无限压栈。
 
-### 9.2 平台执行转场
+### 9.2 转场执行位置与唯一时钟
 
-- core/App 持有逻辑 Route 栈和导航结果，平台持有原生页面与转场对象，不各自决定导航结果。
-- Android、鸿蒙分别使用合适的原生页面/容器转场能力，动画优先作用于整个公共父容器。
-- 不为每个 Surface 单独启动转场，不在 core 增加并行动画时钟。
+- core/App 持有逻辑 Route 栈和导航结果；无论转场由谁执行，平台与 ViewTree 都不能各自决定导航结果。
+- 多 Surface 或不同 SceneHost 之间转场时，Android、鸿蒙分别使用合适的原生页面/容器能力，
+  动画作用于整个公共父容器，不为内部 Native、Web 或未来视频成员分别启动动画，core 不增加并行
+  动画时钟。
+- 纯 Native Route 复用同一 Surface 时，可以由 ViewTree/Canvas 对两个 Route 根执行统一几何转场；
+  此时 ViewTree 是唯一转场执行源，不再让平台根容器重复执行另一套转场。
+- 同一次转场只能有一个进度、一个时钟和一个输入门控来源。转场期间新旧 Route 根都保持有效，
+  只有目标 Route 消费输入；异常取消必须按导航事务落定，不能留下两个可交互根。
 - 首次进入可显示普通占位，Native 首帧准备后展示；不等待远端 Web 或行情数据。
 - 返回开始先停止输入和惯性，最终资源关闭等待退出完成；异常跳过动画也不能跳过释放。
 - 共享元素、Surface 截图或纹理化动画必须单独评审，不能违反 Web 系统合成约束。
@@ -444,14 +476,16 @@ LinkPage 的第一版边界为：
 
 ### 9.4 SceneHost 场景组合与有界复用
 
-导航单位是 Route 及其 SceneHost，不是单个 Surface。纯 Native、Native+Web、LinkPage 组合场景共用
-场景配置、成员生命周期、输入归属和转场协议，但不要求相同数量的物理 Surface，也不把所有页面强行
-塞入当前 `ILinkedLayout` 的分页、Tab 停靠和抽屉语义。
+导航的逻辑单位是 Route，物理执行单位是 SceneHost，不是单个 Surface。多个纯 Native Route 可以按导航
+事务复用同一 SceneHost 和根 Surface；多 Surface 场景则通过明确的 Route-Host 绑定管理成员。纯 Native、
+Native+Web、LinkPage 组合场景共用场景配置、成员生命周期、输入归属和转场协议，但不要求相同数量的
+物理 Surface，也不把所有页面强行塞入当前 `ILinkedLayout` 的分页、Tab 停靠和抽屉语义。
 
 - core/App 持有逻辑 Route、ViewTree 和类型明确的场景内容配置；平台 SceneHost 拥有系统成员并维护
   `ViewId → Surface/组合成员` 映射。ViewTree 仍是唯一页面结构，不另建通用 Surface 树。
-- 顶栏、底部导航、菜单和其他自绘控件属于场景内容，随 SceneHost 根容器一起转场；平台转场只作用于
-  新旧 SceneHost 根容器，不为内部 Native、Web 或未来视频成员分别启动动画。
+- 顶栏、底部导航、菜单和其他自绘控件属于场景内容。多 Surface 平台转场只作用于新旧 SceneHost 根容器，
+  不为内部 Native、Web 或未来视频成员分别启动动画；纯 Native 同 Surface 转场按第 9.2 节由 ViewTree
+  单独执行，不能同时再移动 SceneHost 根容器。
 - push/pop 转场期间，离场与入场 SceneHost 必须同时有效。入场可以先显示占位，不等待 Web 文档、
   行情首包或视频首帧；转场未完成时不得把离场成员换绑给新 Route。
 - Route 逻辑状态与可复用物理 Host 分离。每次换绑使用新的 `hostBindingGeneration`，旧输入、订阅、
@@ -468,6 +502,40 @@ LinkPage 的第一版边界为：
 后续视频内容沿用同一场景模型，但必须先评审类型明确的 `VideoContent`、播放会话所有权和双端能力。
 系统视频组件与解码纹理进入 Vulkan 是不同实现路径，需分别探针生命周期、合成、GPU 同步和资源释放；
 SceneHost 只增加相应平台适配，不引入通用字符串命令通道，也不预设两端能力等价。
+
+### 9.5 纯自绘虚拟 View 导航与多 Surface 缓存边界
+
+近期布局导航采用两条明确路径，不为所有 Route 建立统一的 Surface 缓存：
+
+- **纯 Native Route ↔ 纯 Native Route**：默认复用同一个根 Native Surface 和 SceneHost，由 Navigator
+  切换当前 Route 对应的 ViewTree 根。物理 Surface 不随 push/pop 创建或销毁，长期复用的根 Surface
+  不作为 LRU 缓存项；RouteId、ViewTree 根和输入归属随导航变化，SurfaceRef 与业务内容身份不得混用。
+- **Native Route ↔ 多 Surface 场景**：Navigator 仍唯一决定导航结果，SceneHost 按场景配置创建或
+  复用平台成员。只有这类有实际组合成本的空闲 SceneHost 才进入有界复用缓存；正在显示、转场、持有
+  输入或仍承担返回现场职责的 Host 必须固定，LRU 只能淘汰已解绑且可安全关闭的空闲项。
+
+纯自绘导航还必须满足：
+
+- 每个 Route 保留自己的 ViewTree 根和语义 UI 状态，导航父子不改成布局父子。只有当前目标 Route
+  接收输入，按钮等虚拟 View 通过稳定 ViewId 和类型明确的语义回调提交导航意图，不直接操作 Surface。
+- Route 切换触发布局、绘制及必要的 Platform dirty；恢复时使用最新安全视口和环境重新布局，第一版
+  可以重绘整个 Native Surface，不以旧绝对 bounds 或上一帧像素作为恢复依据。
+- 纯自绘根 Surface 复用不等于物理资源永不被系统销毁。surfaceGeneration 变化、宿主后台回收或最终
+  关闭后仍能根据 Route 和 ViewTree 重建，缓存命中不是页面正确性的前提。
+
+“只保留状态、不保留数据”按以下边界解释：
+
+- Route 保存选中 Page/Tab、K 线周期与视窗、滚动位置和落定后的抽屉状态等 UI 语义状态；pressed、
+  pointerId、半截手势和未落定转场不作为返回状态恢复。
+- SceneHost 缓存只复用物理资源，不拥有或复制行情、评论等业务数据，不拥有 TCP 连接或 MarketDataStore。
+  重新绑定使用新的 hostBindingGeneration，使旧输入、订阅和异步回调失效，再读取当前 Route 状态与
+  数据层最新不可变快照。数据层是否保留 TCP 和业务缓存由自己的生命周期与背压策略决定，不随 Host
+  缓存淘汰而隐式销毁。
+- 活跃 WebView 会同时保留文档和滚动现场。相同 Route 需要保留现场时不得把该成员交给其他 Route；
+  空闲 Host 换绑给新 Route 时必须按新的导航 revision 建立 documentSession，不能把旧文档冒充新页面
+  状态。如果产品要求连文档也不保留，则只能关闭 Web 成员后复用其余兼容资源。
+- 第一版缓存容量先以 1 个兼容多 Surface SceneHost 验证正确性和收益。容量 10 只能作为经过双端内存、
+  GPU、Web/视频资源测量后的硬上限，不是常驻目标，也不授权建立 Native、Web、视频混放的通用池。
 
 ## 10. HTTP 请求与数据 UI 分离
 
@@ -800,6 +868,55 @@ platform/hongmeng/
 
 出口：当前行为可对照，双端缺口有证据，后续 ViewTree 接口获得单独审阅。
 
+### 阶段 0A：现有基础上的布局导航最小 Demo
+
+目标：先用一个独立 `samples/<app>/` 探针验证“虚拟 View 导航 + 多 Surface Host 复用”的实际效果，
+不等待完整 ViewTree、控件体系、Route 框架和真实 TCP 全部完成，也不把探针直接提升为公共 App API。
+现有 Linked Demo 保持可对照，不因探针重写其手势、滚动或动画实现。
+
+Demo 只包含三个页面和两条导航路径：
+
+```text
+A：Native 行情页
+   K 线/分时功能区域 + “进入纯自绘详情”按钮 + “进入多 Surface 联动”按钮
+B：Native 详情页
+   简单几何内容 + “返回”按钮
+C：多 Surface 联动页
+   复用当前 Linked Demo 的内容与平台行为
+
+A ↔ B：复用同一根 Native Surface，切换 Route 对应的虚拟 View 根
+A ↔ C：按场景创建或复用多 Surface SceneHost，C 退出后缓存 1 个空闲 Host
+```
+
+首版实现范围固定为：
+
+- 虚拟 View 只包含 Demo 所需的根节点、Container/Stack、功能区域和 Button，具备稳定 ViewId、
+  bounds、visible、interactive、Canvas 绘制、命中和类型明确的 onClick；不提前实现完整控件清单。
+- A 的 K 线/分时只使用确定性数据与最小几何图元表达布局、刷新和状态恢复效果，不在本阶段提前
+  实现完整图表控件、字体体系或复杂行情交互。
+- A/B push/pop 不改变物理 Surface 身份。A 被覆盖时保留选中周期、K 线视窗和 ViewTree，取消 pressed
+  与未完成手势；返回 A 后按最新视口重新布局并重绘，B 被 pop 后销毁自己的逻辑页面状态。
+- A 使用确定性模拟行情流驱动 K 线/分时，Store 与订阅身份独立于 View 和 Surface。A 被覆盖时 Store
+  可以继续推进 revision，但 A 不绘制；返回后读取最新完整快照。用 Fake Transport 验证连接和订阅
+  不随 Surface 切换重复创建，真实 TCP 协议与设备网络验收仍留在阶段 7。
+- C 的 Host 缓存先固定为 1，只接收退出转场、解除 Route 绑定、停止输入和绘制、失效旧回调后的空闲
+  Host。第二次进入 C 可以命中物理 Host，但必须使用新 RouteId 和 hostBindingGeneration；新 Route
+  使用显式初始 UI 状态，不继承上一个 Route 的页面选择、滚动或抽屉状态。
+- SceneHost 缓存不持有模拟行情 Store、TCP 或业务数据副本。缓存禁用、未命中和淘汰时必须走同一条
+  可正确重建的路径；保留 Web 成员时按第 9.5 节处理文档现场，不把旧文档当成新 Route 的状态恢复。
+- 先验证无动画 push/pop，再分别为 A/B 添加 ViewTree 单时钟几何转场、为 A/C 使用平台 SceneHost
+  根容器转场。任何路径都不得同时存在两套转场进度，转场中的 Host 不参与缓存或淘汰。
+
+Host 回归至少覆盖：虚拟 View 命中与整段输入归属、Route 状态保存/恢复、A/B 根切换、C 缓存命中/
+未命中/淘汰、换绑代次、旧回调拒绝，以及模拟数据 revision 在返回后只读取最新快照。设备日志必须能
+区分 RouteId、ViewId、SceneHost、hostBindingGeneration、SurfaceRef 和 surfaceGeneration，以证明
+“A/B 没有重建 Surface”和“C 命中的是物理 Host 缓存”，而不是仅凭画面相似判断。
+
+出口：先完成 Android 探针，再进行鸿蒙同场景对照。双端连续至少 20 次执行 A→B→A 和 A→C→A→C，
+检查缓存命中/禁用两条路径、前后台、物理 Surface 被动销毁、快速重复点击和旧数据回调；无重复输入、
+无转场外的隐藏页面绘制、无连接或订阅随进出次数线性增长、无旧 Route 状态串入新 Route。记录首帧耗时、
+内存/GPU 资源数量和缓存收益，再决定是否进入完整 ViewTree/Route 实施及是否扩大缓存容量。
+
 ### 阶段 1：纯 C++ 最小 ViewTree、布局、dirty 与环境模型
 
 目标：不依赖平台视图建立可测试的核心结构。
@@ -842,30 +959,41 @@ Host 覆盖：约束布局、嵌套裁剪、dirty 传播、重复更新去重、
 
 出口：双端在首页、详情和转场中切换上述环境，画面、布局、触摸和订阅状态一致，无重复通知和旧订阅回调。
 
-### 阶段 4：独立导航栈与平台转场
+### 阶段 4：独立导航栈、纯自绘虚拟 View 导航与场景转场
 
-目标：跑通简单 Native 首页、底部栏目、详情和返回。
+目标：跑通简单 Native 首页、底部栏目、详情和返回，并证明纯自绘导航不需要重建物理 Surface。
 
 - 建立独立 Route 栈、底部选中状态、系统返回优先级和重复导航策略。
-- 按 Route 创建或绑定 SceneHost，以整个场景根容器执行转场；顶栏、导航和其他成员不分别启动动画，
-  core 不另行动画时钟，转场期间新旧 SceneHost 均保持有效。
-- 被覆盖 Route 停止交互和可见绘制，按策略保留数据、ViewTree 和滚动状态。
-- 转场中发生主题、语言、折叠或关爱模式变化时，新旧 Route 使用同一环境 revision。
+- 纯 Native Route 之间复用同一根 Native Surface 和 SceneHost，通过切换 Route 的 ViewTree 根完成
+  push/pop；按钮只提交导航意图，只有目标 Route 接收输入，不为每个 Route 或控件创建物理 Surface。
+- 纯 Native 同 Surface 转场由 ViewTree/Canvas 使用单一时钟执行；多 Surface 场景按 Route 创建或绑定
+  SceneHost，并由平台以整个场景根容器执行转场。两种路径都不得出现第二套进度或动画时钟。
+- 多 Surface 转场期间新旧 SceneHost 均保持有效；顶栏、导航和其他成员不分别启动动画。被覆盖 Route
+  停止交互和可见绘制，按策略保留 UI 状态、ViewTree 和滚动状态，业务数据仍归数据层。
+- 转场中发生主题、语言、折叠或关爱模式变化时，新旧 Route 使用同一环境 revision，并在恢复时重新布局。
 
-出口：双端逐层进入、逐级返回；覆盖快速点击、进入中返回、退出中再进入、前后台和连续至少 20 次进出。
+出口：双端逐层进入、逐级返回；日志和身份检查证明纯 Native push/pop 没有创建新 Surface；覆盖快速点击、
+进入中返回、退出中再进入、前后台、物理 Surface 被动销毁和连续至少 20 次进出。
 
-### 阶段 5：Web 节点、LinkPage 组合与 Overlay
+### 阶段 5：场景 Surface 布局、Web 节点、LinkPage 组合与 Overlay
 
-目标：将当前联动 Demo 接入新 ViewTree/Route，而不重写平台联动机制。
+目标：打通 C++ 场景级 Surface 布局到双端平台几何的链路，并将当前联动 Demo 接入新 ViewTree/Route，
+而不重写平台联动机制。
 
 - 先验证单 Web 节点，普通帧更新不重建或重载文档。
+- 用同一 ViewTree 布局结果驱动 Native Canvas 与平台 Surface 几何，覆盖“全屏自绘 Surface + 下半屏
+  单个 Web”和“全屏自绘 Surface + 下半屏两个 Web”两种组合；平台按配置创建和组织成员，新增这类
+  普通组合不需要分别编写 Android、鸿蒙页面布局。
+- 验证多成员的有序层级、裁剪、命中、独立文档会话和同帧几何更新；只改变布局时不默认重建 Surface
+  或重载 Web，普通分屏不套入 LinkPage 的联动语义。
 - 将当前 Demo 迁移为一个 LinkPage 平台组合子树，保留双端手势、滚动、分页和抽屉执行。
 - 建立 Overlay 的遮罩、层级、输入门控、返回优先级和成员所有权。
 - 基于 Overlay 实现 Native Dropdown 控件；弹出子树默认共享原 Native Surface，覆盖外部点击、返回、
   取消和选择回调。
 - 自绘按钮可打开底部 Web 弹层，加载失败可提示、重试和关闭。
 
-出口：完整回归慢拖、快滑、斜滑、惯性、取消、Tab 停靠、到顶回拉、抽屉、前后台、Surface 重建和反复进出；
+出口：上述 Native+单/双 Web 组合在双端真实设备上的位置、尺寸、层级、裁剪和命中符合同一 C++ 布局结果；
+完整回归慢拖、快滑、斜滑、惯性、取消、Tab 停靠、到顶回拉、抽屉、前后台、Surface 重建和反复进出；
 不出现 core 与平台双滚动、双动画或重复点击。
 
 ### 阶段 6：HTTP 数据驱动首页
@@ -906,7 +1034,8 @@ Host 覆盖：约束布局、嵌套裁剪、dirty 传播、重复更新去重、
 - 根据性能数据选择局部布局、dirty rect、缓存和可见项构建。
 - 根据产品设计增加共享元素、弹性、错峰和自定义绘制效果。
 - 视频需求进入时先评审 `VideoContent`、播放会话和 SceneHost 复用结构，分别探针系统视频组件与
-  Vulkan 纹理路径；复用通用场景生命周期，不另建 Surface 树，不预设双端能力等价。
+  Vulkan 纹理路径；以“视频 Surface 居中、下方 Web Surface 承担点赞和评论”为候选场景验收布局、
+  层级、命中与生命周期，复用通用场景生命周期，不另建 Surface 树，不预设双端能力等价。
 - 每项复杂平台 Surface 效果先做双端探针；不支持的能力明确降级或拒绝。
 
 出口：新增普通业务样例只修改 App 的 `.cpp/.h` 和必要业务资源，不需要修改平台壳。
@@ -915,7 +1044,8 @@ Host 覆盖：约束布局、嵌套裁剪、dirty 传播、重复更新去重、
 
 ### 15.1 分层验证
 
-- host：ViewTree、布局、dirty、命中、控件状态与语义回调、环境订阅、导航事务、HTTP 状态、TCP 分帧和恢复。
+- host：ViewTree、布局、dirty、命中、控件状态与语义回调、环境订阅、导航事务、SceneHost 缓存命中/
+  淘汰与换绑代次、HTTP 状态、TCP 分帧和恢复。
 - 平台构建：Android assemble/lint，鸿蒙 HAR/HAP 与平台模块打包。
 - 双端设备：真实命中、系统合成、滚动、转场、Web、环境变化、前后台和 Surface 重建。
 - 数据测试：Fake Transport 使用确定性字节流、延迟和错误；设备 TCP 验收使用自建模拟服务和可回放行情。
@@ -952,6 +1082,8 @@ host mock 只能证明核心状态正确，不能证明双端系统视图没有�
 - 在 Surface 接口中接收输入、监听手势或持有业务事件回调。
 - 把控件绘制等同于控件行为，或在绘制阶段处理输入、修改业务状态、请求数据或直接调用 Surface。
 - 让所有 Route 无边界共用或永久缓存同一套物理 Surface，或复用仍在转场、保留现场的有效 SceneHost。
+- 为纯 Native push/pop 创建新的物理 Surface，或把根 Surface 长期复用理解为物理资源永不销毁。
+- 用容量 10 的混合 Surface LRU 保存页面状态或业务数据，或让 Host 缓存淘汰隐式断开 TCP、销毁数据 Store。
 - 为 Web、视频等平台成员另建通用 Surface 树，或绕过类型明确的适配协议扩散业务类型判断。
 - 把导航父子直接当作布局 View.parent，或把 LinkPage 的 PageId 扩张成应用 RouteId。
 - 用全局 EventBus 向所有 View 广播输入、环境、网络和组件事件。
